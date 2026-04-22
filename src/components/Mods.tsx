@@ -9,7 +9,6 @@ import {
   AlertTriangle,
   Archive,
   Check,
-  CloudDownload,
   FolderOpen,
   Layers,
   PackageOpen,
@@ -27,6 +26,7 @@ import {
   Copy,
   X,
   Users,
+  Search,
 } from "lucide-react";
 
 import {
@@ -57,6 +57,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 interface HeroMatch {
@@ -69,15 +70,6 @@ interface HeroMatch {
 interface CharacterSummary {
   id: number;
   name: string;
-}
-
-interface CharacterDataInfo {
-  character_count: number;
-  generated_at: string | null;
-  origin: string;
-  source: string | null;
-  user_file_mtime: number | null;
-  user_file_present: boolean;
 }
 
 interface SyncResult {
@@ -139,26 +131,6 @@ function formatBytes(bytes: number): string {
   return `${gb.toFixed(gb < 10 ? 2 : 1)} GB`;
 }
 
-function formatRelativeTime(unixSecs: number): string {
-  const diff = Date.now() / 1000 - unixSecs;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
-function formatSyncTooltip(info: CharacterDataInfo | null, syncing: boolean): string {
-  if (syncing) return "Syncing hero data…";
-  if (!info) return "Sync hero data";
-  const lines = [`${info.character_count} characters loaded`];
-  if (info.user_file_present && info.user_file_mtime) {
-    lines.push(`Last synced ${formatRelativeTime(info.user_file_mtime)}`);
-  } else {
-    lines.push("Using bundled data. Click to fetch latest.");
-  }
-  return lines.join("\n");
-}
-
 interface ModsStatus {
   mods_folder_exists: boolean;
   mods_folder_path: string;
@@ -209,8 +181,7 @@ export function Mods({
   const [profilesOpen, setProfilesOpen] = useState(false);
   const [knownHeroes, setKnownHeroes] = useState<CharacterSummary[]>([]);
   const [heroFilter, setHeroFilter] = useState<string>("all");
-  const [characterDataInfo, setCharacterDataInfo] = useState<CharacterDataInfo | null>(null);
-  const [syncingCharacterData, setSyncingCharacterData] = useState(false);
+  const [searchQuery, setSearchQuery] = useState<string>("");
   const [profileBusy, setProfileBusy] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
@@ -284,9 +255,6 @@ export function Mods({
     invoke<CharacterSummary[]>("list_known_heroes")
       .then(setKnownHeroes)
       .catch(() => setKnownHeroes([]));
-    invoke<CharacterDataInfo>("get_character_data_info")
-      .then(setCharacterDataInfo)
-      .catch(() => setCharacterDataInfo(null));
   }, []);
 
   useEffect(() => {
@@ -803,30 +771,21 @@ export function Mods({
 
   const filteredEntries = useMemo<ModEntry[]>(() => {
     if (!modsStatus) return [];
-    if (heroFilter === "all") return modsStatus.mod_entries;
+    let entries = modsStatus.mod_entries;
     if (heroFilter === "unknown") {
-      return modsStatus.mod_entries.filter((e) => e.heroes.length === 0);
+      entries = entries.filter((e) => e.heroes.length === 0);
+    } else if (heroFilter !== "all") {
+      const targetId = Number(heroFilter);
+      if (Number.isFinite(targetId)) {
+        entries = entries.filter((e) => e.heroes.some((h) => h.character_id === targetId));
+      }
     }
-    const targetId = Number(heroFilter);
-    if (!Number.isFinite(targetId)) return modsStatus.mod_entries;
-    return modsStatus.mod_entries.filter((e) => e.heroes.some((h) => h.character_id === targetId));
-  }, [modsStatus, heroFilter]);
+    const q = searchQuery.trim().toLowerCase();
+    if (q) entries = entries.filter((e) => e.display_name.toLowerCase().includes(q));
+    return entries;
+  }, [modsStatus, heroFilter, searchQuery]);
   const filteredCount = filteredEntries.length;
-
-  async function syncCharacterData() {
-    if (syncingCharacterData) return;
-    setSyncingCharacterData(true);
-    try {
-      const result = await invoke<SyncResult>("sync_character_data");
-      loadKnownHeroes();
-      if (gamePath) await refresh(true);
-      showNotice(`Synced ${result.character_count} characters from upstream`, "ok", 4000);
-    } catch (e: unknown) {
-      showNotice(`Hero data sync failed: ${String(e)}`, "err");
-    } finally {
-      setSyncingCharacterData(false);
-    }
-  }
+  const filtersActive = heroFilter !== "all" || searchQuery.trim().length > 0;
 
   async function rescanHeroes(entry: ModEntry) {
     if (!gamePath) return;
@@ -902,26 +861,27 @@ export function Mods({
       <div className="flex min-h-8 items-center gap-3">
         <h2 className="shrink-0 text-xl font-bold">Mods</h2>
         {notice && (
-          <span
-            className={cn(
-              "flex min-w-0 items-center gap-1.5 truncate text-[12px] font-medium",
-              notice.type === "ok"
-                ? "text-ok"
-                : notice.type === "err"
-                  ? "text-err"
-                  : "text-muted-foreground",
-              notice.revealPath && "cursor-pointer hover:underline"
-            )}
-            onClick={notice.revealPath ? () => revealItemInDir(notice.revealPath!) : undefined}
-            title={notice.revealPath ? "Click to reveal in explorer" : undefined}
-          >
-            {notice.type === "ok" ? (
-              <CheckCircle2 className="shrink-0" size={14} strokeWidth={2.5} />
-            ) : notice.type === "err" ? (
-              <XCircle className="shrink-0" size={14} strokeWidth={2.5} />
-            ) : null}
-            <span className="truncate">{notice.msg}</span>
-          </span>
+          <Tip content="Click to reveal in explorer" disabled={!notice.revealPath}>
+            <span
+              className={cn(
+                "flex min-w-0 items-center gap-1.5 truncate text-[12px] font-medium",
+                notice.type === "ok"
+                  ? "text-ok"
+                  : notice.type === "err"
+                    ? "text-err"
+                    : "text-muted-foreground",
+                notice.revealPath && "cursor-pointer hover:underline"
+              )}
+              onClick={notice.revealPath ? () => revealItemInDir(notice.revealPath!) : undefined}
+            >
+              {notice.type === "ok" ? (
+                <CheckCircle2 className="shrink-0" size={14} strokeWidth={2.5} />
+              ) : notice.type === "err" ? (
+                <XCircle className="shrink-0" size={14} strokeWidth={2.5} />
+              ) : null}
+              <span className="truncate">{notice.msg}</span>
+            </span>
+          </Tip>
         )}
         {!gamePath && !pathLoading && (
           <span className="flex shrink-0 items-center gap-1.5 text-[12px] font-medium text-warn">
@@ -987,46 +947,52 @@ export function Mods({
                 <span className="text-sm font-semibold">{selected.size} selected</span>
               </div>
               <div className="flex items-center gap-1 -mr-1">
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => bulkToggle(true)}
-                  disabled={bulkBusy || allEnabledInSelection || gameRunning}
-                  className="text-ok hover:text-ok hover:bg-ok/10"
-                  title={gameRunning ? "Close the game to modify mods" : "Enable selected mods"}
+                <Tip
+                  content={gameRunning ? "Close the game to modify mods" : "Enable selected mods"}
                 >
-                  <Power size={13} />
-                  Enable
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => bulkToggle(false)}
-                  disabled={bulkBusy || allDisabledInSelection || gameRunning}
-                  title={gameRunning ? "Close the game to modify mods" : "Disable selected mods"}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => bulkToggle(true)}
+                    disabled={bulkBusy || allEnabledInSelection || gameRunning}
+                    className="text-ok hover:text-ok hover:bg-ok/10"
+                  >
+                    <Power size={13} />
+                    Enable
+                  </Button>
+                </Tip>
+                <Tip
+                  content={gameRunning ? "Close the game to modify mods" : "Disable selected mods"}
                 >
-                  <PowerOff size={13} />
-                  Disable
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => setBulkDeleteOpen(true)}
-                  disabled={bulkBusy || gameRunning}
-                  className="text-err hover:text-err hover:bg-err/10"
-                  title={gameRunning ? "Close the game to modify mods" : "Delete selected mods"}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => bulkToggle(false)}
+                    disabled={bulkBusy || allDisabledInSelection || gameRunning}
+                  >
+                    <PowerOff size={13} />
+                    Disable
+                  </Button>
+                </Tip>
+                <Tip
+                  content={gameRunning ? "Close the game to modify mods" : "Delete selected mods"}
                 >
-                  <Trash2 size={13} />
-                  Delete
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={clearSelection}
-                  title="Clear selection (Esc)"
-                >
-                  <X size={15} />
-                </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setBulkDeleteOpen(true)}
+                    disabled={bulkBusy || gameRunning}
+                    className="text-err hover:text-err hover:bg-err/10"
+                  >
+                    <Trash2 size={13} />
+                    Delete
+                  </Button>
+                </Tip>
+                <Tip content="Clear selection (Esc)">
+                  <Button variant="ghost" size="icon-sm" onClick={clearSelection}>
+                    <X size={15} />
+                  </Button>
+                </Tip>
               </div>
             </>
           ) : (
@@ -1041,22 +1007,42 @@ export function Mods({
                 )}
                 <h3 className="text-sm font-semibold">Installed Mods</h3>
                 {modsStatus && (
-                  <span className="text-[12px] text-muted-foreground">
-                    {heroFilter === "all"
-                      ? `(${enabledCount}/${totalCount} active)`
-                      : `(${filteredCount} of ${totalCount} shown)`}
+                  <span className="inline-block w-28 shrink-0 text-[12px] tabular-nums text-muted-foreground">
+                    {filtersActive
+                      ? `(${filteredCount} of ${totalCount} shown)`
+                      : `(${enabledCount}/${totalCount} active)`}
                   </span>
                 )}
                 {modsStatus && totalCount > 0 && (
+                  <div className="ml-1 flex items-center gap-1.5 rounded-sm border border-border bg-background px-2 h-7 w-48 focus-within:ring-1 focus-within:ring-primary">
+                    <Search size={12} className="text-muted-foreground shrink-0" />
+                    <input
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search mods..."
+                      className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/50"
+                    />
+                    {searchQuery && (
+                      <Tip content="Clear search">
+                        <button
+                          type="button"
+                          onClick={() => setSearchQuery("")}
+                          className="shrink-0 text-muted-foreground hover:text-foreground"
+                        >
+                          <X size={12} />
+                        </button>
+                      </Tip>
+                    )}
+                  </div>
+                )}
+                {modsStatus && totalCount > 0 && (
                   <Select value={heroFilter} onValueChange={setHeroFilter}>
-                    <SelectTrigger
-                      size="sm"
-                      className="ml-1 h-7 w-42.5 text-[12px]"
-                      title="Filter mods by hero"
-                    >
-                      <Users size={12} className="text-muted-foreground" />
-                      <SelectValue placeholder="All heroes" />
-                    </SelectTrigger>
+                    <Tip content="Filter mods by hero">
+                      <SelectTrigger size="sm" className="h-7! w-42.5 px-2 py-0 text-[12px]">
+                        <Users size={12} className="text-muted-foreground" />
+                        <SelectValue placeholder="All heroes" />
+                      </SelectTrigger>
+                    </Tip>
                     <SelectContent className="max-h-72">
                       <SelectItem value="all">All heroes</SelectItem>
                       <SelectItem value="unknown">Unknown / no match</SelectItem>
@@ -1068,37 +1054,15 @@ export function Mods({
                     </SelectContent>
                   </Select>
                 )}
-                {modsStatus && totalCount > 0 && (
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={syncCharacterData}
-                    disabled={syncingCharacterData}
-                    title={formatSyncTooltip(characterDataInfo, syncingCharacterData)}
-                  >
-                    <CloudDownload
-                      size={14}
-                      className={cn(syncingCharacterData && "animate-pulse")}
-                    />
-                  </Button>
-                )}
               </div>
               <div className="flex items-center -mr-1">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={openFolder}
-                  disabled={!gamePath}
-                  title="Open ~mods folder"
-                >
-                  <FolderOpen size={15} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={exportZip}
-                  disabled={enabledCount === 0 || isExporting}
-                  title={
+                <Tip content="Open ~mods folder">
+                  <Button variant="ghost" size="icon-sm" onClick={openFolder} disabled={!gamePath}>
+                    <FolderOpen size={15} />
+                  </Button>
+                </Tip>
+                <Tip
+                  content={
                     enabledCount === 0
                       ? "No enabled mods to export"
                       : isExporting
@@ -1106,19 +1070,23 @@ export function Mods({
                         : "Export enabled mods as .zip or .7z"
                   }
                 >
-                  <Archive size={15} />
-                </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={exportZip}
+                    disabled={enabledCount === 0 || isExporting}
+                  >
+                    <Archive size={15} />
+                  </Button>
+                </Tip>
                 <Popover open={profilesOpen} onOpenChange={setProfilesOpen}>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      disabled={!gamePath}
-                      title="Mod profiles"
-                    >
-                      <Layers size={15} />
-                    </Button>
-                  </PopoverTrigger>
+                  <Tip content="Mod profiles">
+                    <PopoverTrigger asChild>
+                      <Button variant="ghost" size="icon-sm" disabled={!gamePath}>
+                        <Layers size={15} />
+                      </Button>
+                    </PopoverTrigger>
+                  </Tip>
                   <PopoverContent align="end" className="w-64 p-0">
                     <div className="flex items-center justify-between border-b border-border px-3 py-2">
                       <span className="text-sm font-semibold">Profiles</span>
@@ -1188,27 +1156,29 @@ export function Mods({
                         placeholder="New profile name…"
                         className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/50"
                       />
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={saveProfile}
-                        disabled={!newProfileName.trim() || savingProfile || !gamePath}
-                        title="Save current mods as profile"
-                      >
-                        <Plus size={14} />
-                      </Button>
+                      <Tip content="Save current mods as profile">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={saveProfile}
+                          disabled={!newProfileName.trim() || savingProfile || !gamePath}
+                        >
+                          <Plus size={14} />
+                        </Button>
+                      </Tip>
                     </div>
                   </PopoverContent>
                 </Popover>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => refresh()}
-                  disabled={!gamePath}
-                  title="Refresh"
-                >
-                  <RefreshCw size={15} />
-                </Button>
+                <Tip content="Refresh">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => refresh()}
+                    disabled={!gamePath}
+                  >
+                    <RefreshCw size={15} />
+                  </Button>
+                </Tip>
               </div>
             </>
           )}
@@ -1250,9 +1220,9 @@ export function Mods({
             </div>
           ) : (
             <ul ref={listRef}>
-              {filteredEntries.length === 0 && heroFilter !== "all" && (
+              {filteredEntries.length === 0 && filtersActive && (
                 <li className="flex h-12 items-center justify-center text-[12px] text-muted-foreground">
-                  No mods match this filter.
+                  No mods match the current filter.
                 </li>
               )}
               {filteredEntries.map((entry, index) => {
@@ -1296,67 +1266,66 @@ export function Mods({
                             !entry.enabled && "opacity-40"
                           )}
                         >
-                          <span
-                            className="min-w-0 flex-1 truncate"
-                            onDoubleClick={(e) => {
-                              e.stopPropagation();
-                              if (
-                                !busy &&
-                                !bulkBusy &&
-                                !gameRunning &&
-                                renamingMod !== entry.full_name
-                              ) {
-                                setRenamingMod(entry.full_name);
-                              }
-                            }}
-                            title="Double-click to rename"
-                          >
-                            {renamingMod === entry.full_name ? (
-                              <RenameInput
-                                displayName={entry.display_name}
-                                onCommit={(v) => renameMod(entry, v)}
-                                onCancel={() => setRenamingMod(null)}
-                              />
-                            ) : (
-                              <ModName displayName={entry.display_name} />
-                            )}
-                          </span>
-                          {entry.kind === "IoStore" && (
-                            <span className="shrink-0 rounded bg-ok/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
-                              IoStore
-                            </span>
-                          )}
-                          {entry.heroes.slice(0, 2).map((h) => (
+                          <Tip content="Double-click to rename" side="top" align="start">
                             <span
+                              className="min-w-0 flex-1 truncate"
+                              onDoubleClick={(e) => {
+                                e.stopPropagation();
+                                if (
+                                  !busy &&
+                                  !bulkBusy &&
+                                  !gameRunning &&
+                                  renamingMod !== entry.full_name
+                                ) {
+                                  setRenamingMod(entry.full_name);
+                                }
+                              }}
+                            >
+                              {renamingMod === entry.full_name ? (
+                                <RenameInput
+                                  displayName={entry.display_name}
+                                  onCommit={(v) => renameMod(entry, v)}
+                                  onCancel={() => setRenamingMod(null)}
+                                />
+                              ) : (
+                                <ModName displayName={entry.display_name} />
+                              )}
+                            </span>
+                          </Tip>
+                          {entry.heroes.slice(0, 2).map((h) => (
+                            <Tip
                               key={h.character_id}
-                              className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-primary cursor-help truncate max-w-25"
-                              title={
+                              content={
                                 h.skin_names.length > 0
                                   ? `${h.character_name}: ${h.skin_names.join(", ")}`
                                   : `${h.character_name} (character match)`
                               }
                             >
-                              {h.character_name}
-                            </span>
+                              <span className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-primary cursor-help truncate max-w-25">
+                                {h.character_name}
+                              </span>
+                            </Tip>
                           ))}
                           {entry.heroes.length > 2 && (
-                            <span
-                              className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-primary cursor-help"
-                              title={entry.heroes
+                            <Tip
+                              content={entry.heroes
                                 .slice(2)
                                 .map((h) => h.character_name)
                                 .join(", ")}
                             >
-                              +{entry.heroes.length - 2}
-                            </span>
+                              <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-primary cursor-help">
+                                +{entry.heroes.length - 2}
+                              </span>
+                            </Tip>
                           )}
                           {conflictsByMod.has(entry.display_name) && (
-                            <span
-                              className="shrink-0 rounded bg-warn/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-warn cursor-help"
-                              title={`Conflicts with: ${conflictsByMod.get(entry.display_name)!.conflicts_with.join(", ")}`}
+                            <Tip
+                              content={`Conflicts with: ${conflictsByMod.get(entry.display_name)!.conflicts_with.join(", ")}`}
                             >
-                              Conflict
-                            </span>
+                              <span className="shrink-0 rounded bg-warn/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-warn cursor-help">
+                                Conflict
+                              </span>
+                            </Tip>
                           )}
                           <span className="shrink-0 w-12 text-right font-mono text-[11px] text-muted-foreground/60 tabular-nums">
                             {formatBytes(entry.size_bytes)}
@@ -1368,21 +1337,23 @@ export function Mods({
                             onClick={(e) => e.stopPropagation()}
                           >
                             <span className="text-[11px] font-medium text-err">Delete?</span>
-                            <button
-                              title="Confirm delete"
-                              disabled={busy}
-                              onClick={() => deleteMod(entry)}
-                              className="rounded px-1.5 text-[11px] font-semibold bg-err text-white hover:opacity-90 transition-opacity leading-5.5"
-                            >
-                              Yes
-                            </button>
-                            <button
-                              title="Cancel"
-                              onClick={() => setPendingDelete(null)}
-                              className="rounded px-1.5 text-[11px] font-semibold border border-border text-muted-foreground hover:bg-secondary transition-colors leading-5.5"
-                            >
-                              No
-                            </button>
+                            <Tip content="Confirm delete">
+                              <button
+                                disabled={busy}
+                                onClick={() => deleteMod(entry)}
+                                className="rounded px-1.5 text-[11px] font-semibold bg-err text-white hover:opacity-90 transition-opacity leading-5.5"
+                              >
+                                Yes
+                              </button>
+                            </Tip>
+                            <Tip content="Cancel">
+                              <button
+                                onClick={() => setPendingDelete(null)}
+                                className="rounded px-1.5 text-[11px] font-semibold border border-border text-muted-foreground hover:bg-secondary transition-colors leading-5.5"
+                              >
+                                No
+                              </button>
+                            </Tip>
                           </div>
                         ) : (
                           <>
@@ -1393,17 +1364,20 @@ export function Mods({
                               onCheckedChange={() => toggleMod(entry)}
                               className="shrink-0"
                             />
-                            <button
-                              title={gameRunning ? "Close the game to modify mods" : "Delete mod"}
-                              disabled={busy || gameRunning}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteMod(entry);
-                              }}
-                              className="shrink-0 rounded p-1 text-err/70 transition-colors hover:text-err hover:bg-err/10 disabled:opacity-40 disabled:hover:bg-transparent"
+                            <Tip
+                              content={gameRunning ? "Close the game to modify mods" : "Delete mod"}
                             >
-                              <Trash2 size={13} />
-                            </button>
+                              <button
+                                disabled={busy || gameRunning}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteMod(entry);
+                                }}
+                                className="shrink-0 rounded p-1 text-err/70 transition-colors hover:text-err hover:bg-err/10 disabled:opacity-40 disabled:hover:bg-transparent"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </Tip>
                           </>
                         )}
                       </li>
@@ -1491,7 +1465,7 @@ export function Mods({
               className={cn("bg-err text-white hover:bg-err/90 focus-visible:ring-err/40")}
               onClick={bulkDelete}
             >
-              Delete {selected.size}
+              Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1513,9 +1487,9 @@ export function Mods({
                 key={c.asset}
                 className="rounded border border-border bg-secondary/30 p-2.5 text-[12px]"
               >
-                <p className="truncate font-mono text-[11px] text-muted-foreground" title={c.asset}>
-                  {c.asset}
-                </p>
+                <Tip content={c.asset}>
+                  <p className="truncate font-mono text-[11px] text-muted-foreground">{c.asset}</p>
+                </Tip>
                 <div className="mt-1.5 flex flex-col gap-0.5">
                   {c.mods.map((mod, i) => (
                     <span key={mod} className="flex items-center gap-1.5">

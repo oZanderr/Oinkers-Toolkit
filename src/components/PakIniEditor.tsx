@@ -39,6 +39,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 // ── Types matching Rust backend ─────────────────────────────────────
@@ -651,29 +652,29 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
           </SelectTrigger>
           <SelectContent position="popper" className="w-(--radix-select-trigger-width)">
             {paks.map((p) => (
-              <SelectItem
-                key={p.pak_path}
-                value={p.pak_path}
-                className="font-mono text-xs"
-                title={p.pak_name}
-              >
-                {p.pak_name}
-              </SelectItem>
+              <Tip key={p.pak_path} content={p.pak_name} side="right">
+                <SelectItem value={p.pak_path} className="font-mono text-xs">
+                  {p.pak_name}
+                </SelectItem>
+              </Tip>
             ))}
           </SelectContent>
         </Select>
-        <Button variant="ghost" size="icon-sm" onClick={browse} title="Browse for pak file">
-          <FolderOpen size={14} />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => scan()}
-          disabled={scanning || !gamePath}
-          title="Scan for config mods"
-        >
-          <RefreshCw size={14} className={cn(scanning && "animate-spin")} />
-        </Button>
+        <Tip content="Browse for pak file">
+          <Button variant="ghost" size="icon-sm" onClick={browse}>
+            <FolderOpen size={14} />
+          </Button>
+        </Tip>
+        <Tip content="Scan for config mods">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => scan()}
+            disabled={scanning || !gamePath}
+          >
+            <RefreshCw size={14} className={cn(scanning && "animate-spin")} />
+          </Button>
+        </Tip>
       </div>
 
       {/* ── Editor area ── */}
@@ -727,15 +728,16 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
             </div>
 
             <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => (searchOpen ? setSearchOpen(false) : openSearch())}
-                title="Search & Replace (Ctrl+F)"
-                className={cn(searchOpen && "bg-secondary")}
-              >
-                <Search size={13} />
-              </Button>
+              <Tip content="Search & Replace (Ctrl+F)">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => (searchOpen ? setSearchOpen(false) : openSearch())}
+                  className={cn(searchOpen && "bg-secondary")}
+                >
+                  <Search size={13} />
+                </Button>
+              </Tip>
             </div>
           </div>
 
@@ -784,59 +786,61 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
                     : ""}
               </span>
               <div className="flex items-center gap-0.5">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setCaseSensitive((p) => !p)}
-                  title="Match Case"
-                  className={cn(caseSensitive && "bg-secondary text-foreground")}
-                >
-                  <CaseSensitive size={14} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={findPrev}
-                  disabled={matchPositions.length === 0}
-                  title="Previous Match"
-                >
-                  <ChevronUp size={13} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={findNext}
-                  disabled={matchPositions.length === 0}
-                  title="Next Match"
-                >
-                  <ChevronDown size={13} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={replaceOne}
-                  disabled={matchPositions.length === 0}
-                  title="Replace"
-                >
-                  <Replace size={13} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={replaceAllMatches}
-                  disabled={matchPositions.length === 0}
-                  title="Replace All"
-                >
-                  <ReplaceAll size={13} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setSearchOpen(false)}
-                  title="Close"
-                >
-                  <X size={13} />
-                </Button>
+                <Tip content="Match Case">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setCaseSensitive((p) => !p)}
+                    className={cn(caseSensitive && "bg-secondary text-foreground")}
+                  >
+                    <CaseSensitive size={14} />
+                  </Button>
+                </Tip>
+                <Tip content="Previous Match">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={findPrev}
+                    disabled={matchPositions.length === 0}
+                  >
+                    <ChevronUp size={13} />
+                  </Button>
+                </Tip>
+                <Tip content="Next Match">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={findNext}
+                    disabled={matchPositions.length === 0}
+                  >
+                    <ChevronDown size={13} />
+                  </Button>
+                </Tip>
+                <Tip content="Replace">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={replaceOne}
+                    disabled={matchPositions.length === 0}
+                  >
+                    <Replace size={13} />
+                  </Button>
+                </Tip>
+                <Tip content="Replace All">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={replaceAllMatches}
+                    disabled={matchPositions.length === 0}
+                  >
+                    <ReplaceAll size={13} />
+                  </Button>
+                </Tip>
+                <Tip content="Close">
+                  <Button variant="ghost" size="sm" onClick={() => setSearchOpen(false)}>
+                    <X size={13} />
+                  </Button>
+                </Tip>
               </div>
             </div>
           )}

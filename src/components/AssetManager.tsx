@@ -7,20 +7,23 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
-  FileAudio,
-  FolderOpen,
-  PackageOpen,
-  Download,
-  FileOutput,
-  Search,
-  Package,
-  PackagePlus,
-  Layers,
-  RefreshCw,
   CheckCircle2,
   CheckSquare2,
-  Square,
+  Copy,
+  Download,
+  FileAudio,
+  FileOutput,
+  FileText,
+  Folder,
+  FolderOpen,
+  Layers,
   MinusSquare,
+  Package,
+  PackageOpen,
+  PackagePlus,
+  RefreshCw,
+  Search,
+  Square,
   XCircle,
 } from "lucide-react";
 
@@ -35,6 +38,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -44,6 +54,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 type RepackFormat = "pak" | "iostore";
@@ -364,6 +375,35 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     } finally {
       setBusy(false);
     }
+  }
+
+  async function copyToClipboard(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showNotice(`Copied ${label}`, "ok");
+    } catch (e: unknown) {
+      showNotice(`Copy failed: ${String(e)}`, "err");
+    }
+  }
+
+  function parentDir(p: string): string {
+    const idx = p.lastIndexOf("/");
+    return idx > 0 ? p.slice(0, idx) : "";
+  }
+
+  function selectByExtension(ext: string) {
+    const lowered = `.${ext.toLowerCase()}`;
+    const matches = visible.filter((e) => e.path.toLowerCase().endsWith(lowered));
+    if (matches.length === 0) {
+      showNotice(`No ${ext.toUpperCase()} files in view`, "info", { duration: 3000 });
+      return;
+    }
+    setSelectedEntries(new Set(matches.map((e) => e.path)));
+    showNotice(`Selected ${matches.length} ${ext.toUpperCase()} file(s)`, "ok", { duration: 3000 });
+  }
+
+  function clearEntrySelection() {
+    setSelectedEntries(new Set());
   }
 
   async function extractSingleEntry(entry: ContentEntry) {
@@ -707,26 +747,27 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       <div className="flex min-h-8 shrink-0 items-center gap-3">
         <h2 className="shrink-0 text-xl font-bold">Asset Manager</h2>
         {notice && (
-          <span
-            className={cn(
-              "flex min-w-0 items-center gap-1.5 truncate text-[12px] font-medium",
-              notice.type === "ok"
-                ? "text-ok"
-                : notice.type === "err"
-                  ? "text-err"
-                  : "text-muted-foreground",
-              notice.revealPath && "cursor-pointer hover:underline"
-            )}
-            onClick={notice.revealPath ? () => revealItemInDir(notice.revealPath!) : undefined}
-            title={notice.revealPath ? "Click to reveal in explorer" : undefined}
-          >
-            {notice.type === "ok" ? (
-              <CheckCircle2 className="shrink-0" size={14} strokeWidth={2.5} />
-            ) : notice.type === "err" ? (
-              <XCircle className="shrink-0" size={14} strokeWidth={2.5} />
-            ) : null}
-            <span className="truncate">{notice.msg}</span>
-          </span>
+          <Tip content="Click to reveal in explorer" disabled={!notice.revealPath}>
+            <span
+              className={cn(
+                "flex min-w-0 items-center gap-1.5 truncate text-[12px] font-medium",
+                notice.type === "ok"
+                  ? "text-ok"
+                  : notice.type === "err"
+                    ? "text-err"
+                    : "text-muted-foreground",
+                notice.revealPath && "cursor-pointer hover:underline"
+              )}
+              onClick={notice.revealPath ? () => revealItemInDir(notice.revealPath!) : undefined}
+            >
+              {notice.type === "ok" ? (
+                <CheckCircle2 className="shrink-0" size={14} strokeWidth={2.5} />
+              ) : notice.type === "err" ? (
+                <XCircle className="shrink-0" size={14} strokeWidth={2.5} />
+              ) : null}
+              <span className="truncate">{notice.msg}</span>
+            </span>
+          </Tip>
         )}
         {legacyProgress && (
           <div className="flex min-w-0 items-center gap-2">
@@ -815,24 +856,16 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
             <div className="flex shrink-0 items-center justify-between gap-1.5 border-b border-border bg-card px-3 py-2">
               <h3 className="text-sm font-semibold">Game Paks</h3>
               <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={openPak}
-                  disabled={busy}
-                  title="Browse for a pak file"
-                >
-                  <FolderOpen size={15} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={listPaks}
-                  disabled={busy}
-                  title="Refresh game paks"
-                >
-                  <RefreshCw size={15} />
-                </Button>
+                <Tip content="Browse for a pak file">
+                  <Button variant="ghost" size="icon-sm" onClick={openPak} disabled={busy}>
+                    <FolderOpen size={15} />
+                  </Button>
+                </Tip>
+                <Tip content="Refresh game paks">
+                  <Button variant="ghost" size="icon-sm" onClick={listPaks} disabled={busy}>
+                    <RefreshCw size={15} />
+                  </Button>
+                </Tip>
               </div>
             </div>
 
@@ -859,34 +892,34 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                     const displayName =
                       isMod && modsIdx !== -1 ? p.slice(modsIdx + 1).replace(/\\/g, "/") : fileName;
                     return (
-                      <li
-                        key={p}
-                        className={cn(
-                          "flex items-center gap-2 border-b border-border/50 px-3 py-2 last:border-none",
-                          "cursor-pointer",
-                          isSelected ? "bg-secondary text-foreground" : "hover:bg-secondary/50"
-                        )}
-                        onClick={() => inspectPak(p)}
-                        title={fileName}
-                      >
-                        {isManual ? (
-                          <PackagePlus size={14} className="shrink-0 text-sky-400" />
-                        ) : (
-                          <Package
-                            size={14}
-                            className={cn(
-                              "shrink-0",
-                              isMod ? "text-amber-400" : "text-muted-foreground"
-                            )}
-                          />
-                        )}
-                        <span className="flex-1 truncate text-[12px]">{displayName}</span>
-                        {isIoStore && (
-                          <span className="shrink-0 rounded bg-ok/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
-                            IoStore
-                          </span>
-                        )}
-                      </li>
+                      <Tip key={p} content={fileName} side="top" align="end">
+                        <li
+                          className={cn(
+                            "flex items-center gap-2 border-b border-border/50 px-3 py-2 last:border-none",
+                            "cursor-pointer",
+                            isSelected ? "bg-secondary text-foreground" : "hover:bg-secondary/50"
+                          )}
+                          onClick={() => inspectPak(p)}
+                        >
+                          {isManual ? (
+                            <PackagePlus size={14} className="shrink-0 text-sky-400" />
+                          ) : (
+                            <Package
+                              size={14}
+                              className={cn(
+                                "shrink-0",
+                                isMod ? "text-amber-400" : "text-muted-foreground"
+                              )}
+                            />
+                          )}
+                          <span className="flex-1 truncate text-[12px]">{displayName}</span>
+                          {isIoStore && (
+                            <span className="shrink-0 rounded bg-ok/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
+                              IoStore
+                            </span>
+                          )}
+                        </li>
+                      </Tip>
                     );
                   })}
                 </ul>
@@ -901,85 +934,103 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
             {/* Title + actions */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-                <h3 className="truncate text-sm font-semibold" title={selectedPak || ""}>
-                  {pakName ?? "Contents"}
-                </h3>
-                <span
-                  className={cn(
-                    "truncate text-[11px] text-muted-foreground",
-                    !selectedPak && "invisible"
-                  )}
-                  title={selectedPak || ""}
+                <Tip
+                  content={selectedPak || ""}
+                  disabled={!selectedPak}
+                  side="bottom"
+                  align="start"
                 >
-                  {selectedPak || "\u00A0"}
-                </span>
+                  <h3 className="truncate text-sm font-semibold">{pakName ?? "Contents"}</h3>
+                </Tip>
+                <Tip
+                  content={selectedPak || ""}
+                  disabled={!selectedPak}
+                  side="bottom"
+                  align="start"
+                >
+                  <span
+                    className={cn(
+                      "truncate text-[11px] text-muted-foreground",
+                      !selectedPak && "invisible"
+                    )}
+                  >
+                    {selectedPak || "\u00A0"}
+                  </span>
+                </Tip>
               </div>
 
               <div className="flex shrink-0 items-center gap-1 overflow-visible py-1 -my-1 pr-1 -mr-1">
                 {hasSelectedBnk && (
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={extractHitsoundWavs}
-                    disabled={busy || !selectedPak || !gamePath}
-                    title="Extract hitsound WAVs from this mod's soundbank"
-                  >
-                    <FileAudio size={15} />
-                  </Button>
+                  <Tip content="Extract hitsound WAVs from this mod's soundbank">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={extractHitsoundWavs}
+                      disabled={busy || !selectedPak || !gamePath}
+                    >
+                      <FileAudio size={15} />
+                    </Button>
+                  </Tip>
                 )}
                 {selectedEntries.size > 0 &&
                   selectedIsIoStore &&
                   selectedUtocEntries.length > 0 && (
+                    <Tip
+                      content={`Convert ${selectedUtocEntries.length} selected IoStore assets to legacy format`}
+                    >
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="relative"
+                        onClick={exportLegacySelected}
+                        disabled={busy || !selectedPak}
+                      >
+                        <FileOutput size={15} />
+                        <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-1 text-[8px] font-bold leading-none text-background">
+                          {selectedUtocEntries.length}
+                        </span>
+                      </Button>
+                    </Tip>
+                  )}
+                {selectedEntries.size > 0 ? (
+                  <Tip content={`Extract ${selectedEntries.size} selected files`}>
                     <Button
                       variant="ghost"
                       size="icon-sm"
                       className="relative"
-                      onClick={exportLegacySelected}
+                      onClick={extractSelected}
                       disabled={busy || !selectedPak}
-                      title={`Convert ${selectedUtocEntries.length} selected IoStore assets to legacy format`}
                     >
-                      <FileOutput size={15} />
+                      <Download size={15} />
                       <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-1 text-[8px] font-bold leading-none text-background">
-                        {selectedUtocEntries.length}
+                        {selectedEntries.size}
                       </span>
                     </Button>
-                  )}
-                {selectedEntries.size > 0 ? (
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="relative"
-                    onClick={extractSelected}
-                    disabled={busy || !selectedPak}
-                    title={`Extract ${selectedEntries.size} selected files`}
-                  >
-                    <Download size={15} />
-                    <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-1 text-[8px] font-bold leading-none text-background">
-                      {selectedEntries.size}
-                    </span>
-                  </Button>
+                  </Tip>
                 ) : (
                   <>
                     {selectedIsIoStore && (
+                      <Tip content="Convert IoStore assets to legacy .uasset/.uexp for UAssetGUI">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={exportLegacy}
+                          disabled={busy || !selectedPak}
+                        >
+                          <FileOutput size={15} />
+                        </Button>
+                      </Tip>
+                    )}
+                    <Tip content="Extract all files">
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        onClick={exportLegacy}
+                        onClick={unpackSelected}
                         disabled={busy || !selectedPak}
-                        title="Convert IoStore assets to legacy .uasset/.uexp for UAssetGUI"
                       >
-                        <FileOutput size={15} />
+                        <Download size={15} />
                       </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={unpackSelected}
-                      disabled={busy || !selectedPak}
-                      title="Extract all files"
-                    >
-                      <Download size={15} />
-                    </Button>
+                    </Tip>
                   </>
                 )}
               </div>
@@ -988,25 +1039,28 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
             {/* Filter + select-all */}
             <div className="flex items-center gap-2">
               {selectedPak && (
-                <button
-                  className={cn(
-                    "flex shrink-0 items-center text-muted-foreground hover:text-foreground",
-                    visible.length === 0 && "invisible"
-                  )}
-                  onClick={toggleSelectAll}
-                  title={
+                <Tip
+                  content={
                     selectedEntries.size === visible.length ? "Deselect all" : "Select all visible"
                   }
                 >
-                  {selectedEntries.size === 0 ? (
-                    <Square size={16} />
-                  ) : selectedEntries.size === visible.length &&
-                    visible.every((e) => selectedEntries.has(e.path)) ? (
-                    <CheckSquare2 size={16} />
-                  ) : (
-                    <MinusSquare size={16} />
-                  )}
-                </button>
+                  <button
+                    className={cn(
+                      "flex shrink-0 items-center text-muted-foreground hover:text-foreground",
+                      visible.length === 0 && "invisible"
+                    )}
+                    onClick={toggleSelectAll}
+                  >
+                    {selectedEntries.size === 0 ? (
+                      <Square size={16} />
+                    ) : selectedEntries.size === visible.length &&
+                      visible.every((e) => selectedEntries.has(e.path)) ? (
+                      <CheckSquare2 size={16} />
+                    ) : (
+                      <MinusSquare size={16} />
+                    )}
+                  </button>
+                </Tip>
               )}
               <div className="relative min-w-0 flex-1">
                 <Search
@@ -1044,34 +1098,82 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                 {contentsVirtualizer.getVirtualItems().map((vRow) => {
                   const entry = visible[vRow.index];
                   const isChecked = selectedEntries.has(entry.path);
+                  const fileName = entry.path.split("/").pop() ?? entry.path;
+                  const folderPath = parentDir(entry.path);
+                  const ext = fileName.includes(".") ? (fileName.split(".").pop() ?? "") : "";
+                  const showExtractSelected = isChecked && selectedEntries.size > 1;
                   return (
-                    <div
-                      key={vRow.index}
-                      className={cn(
-                        "absolute left-0 top-0 flex w-full cursor-pointer items-center gap-2 border-b border-border/50 px-3",
-                        isChecked ? "bg-secondary/80" : "hover:bg-secondary/50"
-                      )}
-                      style={{
-                        height: `${vRow.size}px`,
-                        transform: `translateY(${vRow.start}px)`,
-                      }}
-                      onClick={(e) => handleEntryClick(vRow.index, e)}
-                      onDoubleClick={() => extractSingleEntry(entry)}
-                      title={entry.path}
-                    >
-                      {isChecked ? (
-                        <CheckSquare2 size={13} className="shrink-0 text-foreground" />
-                      ) : (
-                        <Square size={13} className="shrink-0 text-muted-foreground/50" />
-                      )}
-                      <span className="shrink-0 text-muted-foreground">{fileIcon(entry.path)}</span>
-                      <span className="truncate font-mono text-[11px]">{entry.path}</span>
-                      {entry.source === "utoc" && (
-                        <span className="ml-auto shrink-0 rounded bg-ok/15 px-1 py-0.5 text-[8px] font-semibold uppercase leading-none text-ok">
-                          utoc
-                        </span>
-                      )}
-                    </div>
+                    <ContextMenu key={vRow.index}>
+                      <ContextMenuTrigger asChild>
+                        <div
+                          className={cn(
+                            "absolute left-0 top-0 flex w-full cursor-pointer items-center gap-2 border-b border-border/50 px-3",
+                            isChecked ? "bg-secondary/80" : "hover:bg-secondary/50"
+                          )}
+                          style={{
+                            height: `${vRow.size}px`,
+                            transform: `translateY(${vRow.start}px)`,
+                          }}
+                          onClick={(e) => handleEntryClick(vRow.index, e)}
+                          onDoubleClick={() => extractSingleEntry(entry)}
+                          title={entry.path}
+                        >
+                          {isChecked ? (
+                            <CheckSquare2 size={13} className="shrink-0 text-foreground" />
+                          ) : (
+                            <Square size={13} className="shrink-0 text-muted-foreground/50" />
+                          )}
+                          <span className="shrink-0 text-muted-foreground">
+                            {fileIcon(entry.path)}
+                          </span>
+                          <span className="truncate font-mono text-[11px]">{entry.path}</span>
+                          {entry.source === "utoc" && (
+                            <span className="ml-auto shrink-0 rounded bg-ok/15 px-1 py-0.5 text-[8px] font-semibold uppercase leading-none text-ok">
+                              utoc
+                            </span>
+                          )}
+                        </div>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuItem onSelect={() => copyToClipboard(entry.path, "path")}>
+                          <Copy />
+                          Copy Path
+                        </ContextMenuItem>
+                        <ContextMenuItem onSelect={() => copyToClipboard(fileName, "file name")}>
+                          <FileText />
+                          Copy File Name
+                        </ContextMenuItem>
+                        <ContextMenuItem
+                          onSelect={() => copyToClipboard(folderPath, "folder path")}
+                          disabled={!folderPath}
+                        >
+                          <Folder />
+                          Copy Folder Path
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onSelect={() => extractSingleEntry(entry)}>
+                          <Download />
+                          Extract…
+                        </ContextMenuItem>
+                        {showExtractSelected && (
+                          <ContextMenuItem onSelect={() => extractSelected()}>
+                            <PackageOpen />
+                            Extract {selectedEntries.size} Selected…
+                          </ContextMenuItem>
+                        )}
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onSelect={() => selectByExtension(ext)} disabled={!ext}>
+                          <Layers />
+                          Select All .{ext || "ext"}
+                        </ContextMenuItem>
+                        {selectedEntries.size > 0 && (
+                          <ContextMenuItem onSelect={clearEntrySelection}>
+                            <XCircle />
+                            Clear Selection
+                          </ContextMenuItem>
+                        )}
+                      </ContextMenuContent>
+                    </ContextMenu>
                   );
                 })}
               </div>
@@ -1081,9 +1183,9 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
           {/* Footer */}
           {selectedPak && footerText && (
             <div className="shrink-0 border-t border-border bg-card px-3 py-1.5">
-              <p className="truncate text-[11px] text-muted-foreground" title={footerText}>
-                {footerText}
-              </p>
+              <Tip content={footerText} side="top" align="start">
+                <p className="truncate text-[11px] text-muted-foreground">{footerText}</p>
+              </Tip>
             </div>
           )}
         </div>

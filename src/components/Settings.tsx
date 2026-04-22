@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   CheckCircle2,
+  CloudDownload,
   FolderOpen,
   RefreshCw,
   Save,
@@ -17,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Tip } from "@/components/ui/tooltip";
 import type { UpdateInfo } from "@/hooks/useUpdateCheck";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +26,31 @@ interface InstallInfo {
   path: string;
   source: string;
   launch_url: string;
+}
+
+interface CharacterDataInfo {
+  character_count: number;
+  generated_at: string | null;
+  origin: string;
+  source: string | null;
+  user_file_mtime: number | null;
+  user_file_present: boolean;
+}
+
+interface SyncResult {
+  character_count: number;
+  generated_at: string | null;
+  fetched_at: number;
+  bytes: number;
+  source_url: string;
+}
+
+function formatRelativeTime(unixSecs: number): string {
+  const diff = Date.now() / 1000 - unixSecs;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
 }
 
 interface Props {
@@ -77,6 +104,14 @@ export function Settings({
     type: "ok" | "err";
   } | null>(null);
   const bypassNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [characterDataInfo, setCharacterDataInfo] = useState<CharacterDataInfo | null>(null);
+  const [syncingHeroes, setSyncingHeroes] = useState(false);
+  const [syncHeroNotice, setSyncHeroNotice] = useState<{
+    msg: string;
+    type: "ok" | "err";
+  } | null>(null);
+  const syncHeroNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync draft when parent gamePath changes externally (e.g. detect, initial load)
   useEffect(() => {
@@ -150,6 +185,33 @@ export function Settings({
         setSavedAutoSyncHeroes(true);
       });
   }, []);
+
+  useEffect(() => {
+    invoke<CharacterDataInfo>("get_character_data_info")
+      .then(setCharacterDataInfo)
+      .catch(() => setCharacterDataInfo(null));
+  }, []);
+
+  async function syncHeroesNow() {
+    if (syncingHeroes) return;
+    if (syncHeroNoticeTimer.current) clearTimeout(syncHeroNoticeTimer.current);
+    setSyncHeroNotice(null);
+    setSyncingHeroes(true);
+    try {
+      const result = await invoke<SyncResult>("sync_character_data");
+      const info = await invoke<CharacterDataInfo>("get_character_data_info").catch(() => null);
+      if (info) setCharacterDataInfo(info);
+      setSyncHeroNotice({
+        msg: `Synced ${result.character_count} characters`,
+        type: "ok",
+      });
+    } catch (e: unknown) {
+      setSyncHeroNotice({ msg: String(e), type: "err" });
+    } finally {
+      setSyncingHeroes(false);
+      syncHeroNoticeTimer.current = setTimeout(() => setSyncHeroNotice(null), 6000);
+    }
+  }
 
   async function removeBypass() {
     if (bypassNoticeTimer.current) clearTimeout(bypassNoticeTimer.current);
@@ -316,34 +378,33 @@ export function Settings({
               </div>
             </div>
             <div className="relative">
-              <Input
-                value={draftGamePath}
-                onChange={(e) => {
-                  setDraftGamePath(e.target.value);
-                  setPathError(null);
-                }}
-                placeholder={`e.g. C:\\Program Files (x86)\\Steam\\steamapps\\common\\MarvelRivals`}
-                title={draftGamePath}
-                className="h-8 pr-20 rounded-none border-0 shadow-none font-mono text-[12px] focus-visible:ring-0 focus-visible:border-0"
-              />
+              <Tip content={draftGamePath} disabled={!draftGamePath}>
+                <Input
+                  value={draftGamePath}
+                  onChange={(e) => {
+                    setDraftGamePath(e.target.value);
+                    setPathError(null);
+                  }}
+                  placeholder={`e.g. C:\\Program Files (x86)\\Steam\\steamapps\\common\\MarvelRivals`}
+                  className="h-8 pr-20 rounded-none border-0 shadow-none font-mono text-[12px] focus-visible:ring-0 focus-visible:border-0"
+                />
+              </Tip>
               <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={browse}
-                  title="Browse for game folder"
-                >
-                  <FolderOpen size={14} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => detect()}
-                  disabled={detecting}
-                  title="Auto-detect game install"
-                >
-                  <Search size={14} className={cn(detecting && "animate-pulse")} />
-                </Button>
+                <Tip content="Browse for game folder">
+                  <Button variant="ghost" size="icon-sm" onClick={browse}>
+                    <FolderOpen size={14} />
+                  </Button>
+                </Tip>
+                <Tip content="Auto-detect game install">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => detect()}
+                    disabled={detecting}
+                  >
+                    <Search size={14} className={cn(detecting && "animate-pulse")} />
+                  </Button>
+                </Tip>
               </div>
             </div>
           </div>
@@ -353,24 +414,23 @@ export function Settings({
             <div className="border-b border-border bg-card px-3 py-2">
               <h3 className="text-sm font-semibold">Launch Options</h3>
             </div>
-            <label
-              className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50"
-              title={skipLauncherError ?? undefined}
-            >
-              <div className="flex flex-1 flex-col gap-0.5">
-                <span className={cn("text-[13px] font-medium", skipLauncherError && "text-err")}>
-                  Skip Launcher
-                </span>
-                <span className="text-[11px] text-muted-foreground">
-                  Skip the launcher window and go straight into the game.
-                </span>
-              </div>
-              <Switch
-                checked={draftSkipLauncher ?? false}
-                onCheckedChange={setDraftSkipLauncher}
-                disabled={!draftGamePath || draftSkipLauncher === null}
-              />
-            </label>
+            <Tip content={skipLauncherError} disabled={!skipLauncherError}>
+              <label className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
+                <div className="flex flex-1 flex-col gap-0.5">
+                  <span className={cn("text-[13px] font-medium", skipLauncherError && "text-err")}>
+                    Skip Launcher
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    Skip the launcher window and go straight into the game.
+                  </span>
+                </div>
+                <Switch
+                  checked={draftSkipLauncher ?? false}
+                  onCheckedChange={setDraftSkipLauncher}
+                  disabled={!draftGamePath || draftSkipLauncher === null}
+                />
+              </label>
+            </Tip>
             {!draftGamePath && (
               <div className="px-3 py-2">
                 <span className="text-[11px] text-muted-foreground">Set a game path first.</span>
@@ -396,19 +456,43 @@ export function Settings({
                 disabled={draftRecursive === null}
               />
             </label>
-            <label className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
+            <div className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
               <div className="flex flex-1 flex-col gap-0.5">
                 <span className="text-[13px] font-medium">Auto-sync hero data</span>
                 <span className="text-[11px] text-muted-foreground">
-                  Fetch the latest character/skin list from GitHub on launch (once per day).
+                  Fetch the latest character/skin list from GitHub (once per day).
+                  {characterDataInfo &&
+                    characterDataInfo.user_file_present &&
+                    characterDataInfo.user_file_mtime && (
+                      <> Last synced {formatRelativeTime(characterDataInfo.user_file_mtime)}.</>
+                    )}
                 </span>
+                {syncHeroNotice && (
+                  <span
+                    className={cn(
+                      "mt-0.5 flex items-center gap-1.5 text-[11px] font-medium",
+                      syncHeroNotice.type === "ok" ? "text-ok" : "text-err"
+                    )}
+                  >
+                    {syncHeroNotice.type === "ok" ? (
+                      <CheckCircle2 size={13} strokeWidth={2.5} />
+                    ) : (
+                      <XCircle size={13} strokeWidth={2.5} />
+                    )}
+                    {syncHeroNotice.msg}
+                  </span>
+                )}
               </div>
+              <Button variant="outline" size="sm" onClick={syncHeroesNow} disabled={syncingHeroes}>
+                <CloudDownload size={13} className={cn(syncingHeroes && "animate-pulse")} />
+                Sync now
+              </Button>
               <Switch
                 checked={draftAutoSyncHeroes ?? false}
                 onCheckedChange={setDraftAutoSyncHeroes}
                 disabled={draftAutoSyncHeroes === null}
               />
-            </label>
+            </div>
           </div>
 
           {/* ── Signature Bypass ── */}
@@ -451,30 +535,16 @@ export function Settings({
               <h3 className="text-sm font-semibold">Updates</h3>
             </div>
 
-            <label className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
+            <div className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
               <div className="flex flex-1 flex-col gap-0.5">
                 <span className="text-[13px] font-medium">Check for updates on startup</span>
                 <span className="text-[11px] text-muted-foreground">
                   Automatically check GitHub for new releases when the app launches.
                 </span>
-              </div>
-              <Switch
-                checked={draftAutoCheck ?? false}
-                onCheckedChange={setDraftAutoCheck}
-                disabled={draftAutoCheck === null}
-              />
-            </label>
-
-            <div className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
-              <div className="flex flex-1 flex-col gap-0.5">
-                <span className="text-[13px] font-medium">Check for updates now</span>
-                <span className="text-[11px] text-muted-foreground">
-                  Manually check GitHub for the latest release.
-                </span>
                 {updateBadge && (
                   <span
                     className={cn(
-                      "flex items-center gap-1.5 text-[11px] font-medium",
+                      "mt-0.5 flex items-center gap-1.5 text-[11px] font-medium",
                       updateBadge.type === "info" ? "text-blue-400" : "text-ok"
                     )}
                   >
@@ -483,16 +553,26 @@ export function Settings({
                   </span>
                 )}
                 {updateError && (
-                  <span className="flex items-center gap-1 text-[11px] font-medium text-err">
+                  <span className="mt-0.5 flex items-center gap-1 text-[11px] font-medium text-err">
                     <XCircle size={13} strokeWidth={2.5} />
                     {updateError}
                   </span>
                 )}
               </div>
-              <Button variant="blue" size="sm" onClick={checkUpdateNow} disabled={updateChecking}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={checkUpdateNow}
+                disabled={updateChecking}
+              >
                 <RefreshCw size={13} className={cn(updateChecking && "animate-spin")} />
                 Check now
               </Button>
+              <Switch
+                checked={draftAutoCheck ?? false}
+                onCheckedChange={setDraftAutoCheck}
+                disabled={draftAutoCheck === null}
+              />
             </div>
           </div>
         </div>

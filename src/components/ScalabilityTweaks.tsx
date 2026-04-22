@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 // ── Types matching Rust backend (serde tag="kind" + flatten) ─────────
@@ -270,31 +271,25 @@ export function ScalabilityTweaks({
               </Button>
             </div>
             <div className="relative">
-              <Input
-                className="h-8 pr-16 rounded-none border-0 shadow-none font-mono text-[12px] focus-visible:ring-0 focus-visible:border-0"
-                value={filePath}
-                onChange={(e) => setFilePath(e.target.value)}
-                placeholder="Path to Scalability.ini\u2026"
-                title={filePath}
-              />
+              <Tip content={filePath} disabled={!filePath}>
+                <Input
+                  className="h-8 pr-16 rounded-none border-0 shadow-none font-mono text-[12px] focus-visible:ring-0 focus-visible:border-0"
+                  value={filePath}
+                  onChange={(e) => setFilePath(e.target.value)}
+                  placeholder="Path to Scalability.ini\u2026"
+                />
+              </Tip>
               <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={onBrowse}
-                  title="Browse for config file"
-                >
-                  <FolderOpen size={14} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={onDetect}
-                  disabled={detecting}
-                  title="Auto-detect config file"
-                >
-                  <Search size={14} className={cn(detecting && "animate-pulse")} />
-                </Button>
+                <Tip content="Browse for config file">
+                  <Button variant="ghost" size="icon-sm" onClick={onBrowse}>
+                    <FolderOpen size={14} />
+                  </Button>
+                </Tip>
+                <Tip content="Auto-detect config file">
+                  <Button variant="ghost" size="icon-sm" onClick={onDetect} disabled={detecting}>
+                    <Search size={14} className={cn(detecting && "animate-pulse")} />
+                  </Button>
+                </Tip>
               </div>
             </div>
           </div>

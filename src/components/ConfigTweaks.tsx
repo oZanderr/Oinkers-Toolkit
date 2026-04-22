@@ -6,6 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, FileText, Package, Trash2, UploadCloud, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import { PakTweaks } from "./PakTweaks";
@@ -190,15 +191,12 @@ export function ConfigTweaks({ gamePath, isActive }: Props) {
           </span>
         )}
         <div className="ml-auto">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={clearShaderCache}
-            title="Recommended after changing config tweaks"
-          >
-            <Trash2 size={13} />
-            Clear Shader Cache
-          </Button>
+          <Tip content="Recommended after changing config tweaks">
+            <Button variant="outline" size="sm" onClick={clearShaderCache}>
+              <Trash2 size={13} />
+              Clear Shader Cache
+            </Button>
+          </Tip>
         </div>
       </div>
 

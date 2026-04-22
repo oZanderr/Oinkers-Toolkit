@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider as SliderUI } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 // ── Types matching Rust backend ──────────────────────────────────────
@@ -540,48 +541,47 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <span className="shrink-0 text-sm font-semibold">Config Mods</span>
                 {notice && (
-                  <span
-                    title={notice.msg}
-                    className={cn(
-                      "flex min-w-0 items-center gap-1 text-[12px] font-medium",
-                      notice.type === "ok"
-                        ? "text-ok"
-                        : notice.type === "err"
-                          ? "text-err"
-                          : "text-warn"
-                    )}
-                  >
-                    {notice.type === "ok" && (
-                      <CheckCircle2 size={13} strokeWidth={2.5} className="shrink-0" />
-                    )}
-                    {notice.type === "err" && (
-                      <XCircle size={13} strokeWidth={2.5} className="shrink-0" />
-                    )}
-                    {notice.type === "info" && (
-                      <TriangleAlert size={13} strokeWidth={2.5} className="shrink-0" />
-                    )}
-                    <span className="truncate">{notice.msg}</span>
-                  </span>
+                  <Tip content={notice.msg}>
+                    <span
+                      className={cn(
+                        "flex min-w-0 items-center gap-1 text-[12px] font-medium",
+                        notice.type === "ok"
+                          ? "text-ok"
+                          : notice.type === "err"
+                            ? "text-err"
+                            : "text-warn"
+                      )}
+                    >
+                      {notice.type === "ok" && (
+                        <CheckCircle2 size={13} strokeWidth={2.5} className="shrink-0" />
+                      )}
+                      {notice.type === "err" && (
+                        <XCircle size={13} strokeWidth={2.5} className="shrink-0" />
+                      )}
+                      {notice.type === "info" && (
+                        <TriangleAlert size={13} strokeWidth={2.5} className="shrink-0" />
+                      )}
+                      <span className="truncate">{notice.msg}</span>
+                    </span>
+                  </Tip>
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-0.5">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={browse}
-                  title="Browse for config mods"
-                >
-                  <FolderOpen size={14} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => scan()}
-                  disabled={scanning || !gamePath}
-                  title="Scan for config mods"
-                >
-                  <Search size={14} className={cn(scanning && "animate-pulse")} />
-                </Button>
+                <Tip content="Browse for config mods">
+                  <Button variant="ghost" size="icon-sm" onClick={browse}>
+                    <FolderOpen size={14} />
+                  </Button>
+                </Tip>
+                <Tip content="Scan for config mods">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => scan()}
+                    disabled={scanning || !gamePath}
+                  >
+                    <Search size={14} className={cn(scanning && "animate-pulse")} />
+                  </Button>
+                </Tip>
               </div>
             </div>
 
@@ -641,13 +641,14 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                         )}
                       </div>
                     </button>
-                    <button
-                      onClick={() => removePak(pak.pak_path)}
-                      className="mr-2 shrink-0 rounded p-1.5 text-muted-foreground/60 transition-colors hover:bg-destructive/15 hover:text-destructive"
-                      title="Remove from list"
-                    >
-                      <X size={14} />
-                    </button>
+                    <Tip content="Remove from list">
+                      <button
+                        onClick={() => removePak(pak.pak_path)}
+                        className="mr-2 shrink-0 rounded p-1.5 text-muted-foreground/60 transition-colors hover:bg-destructive/15 hover:text-destructive"
+                      >
+                        <X size={14} />
+                      </button>
+                    </Tip>
                   </li>
                 ))}
               </ul>

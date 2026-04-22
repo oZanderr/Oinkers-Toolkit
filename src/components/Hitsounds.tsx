@@ -30,6 +30,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 interface WavValidation {
@@ -401,24 +402,27 @@ export function Hitsounds({ gamePath, isActive }: Props) {
             </Button>
           </div>
           {buildResult && (
-            <div
-              className={cn(
-                "flex items-center gap-1.5 text-xs",
-                buildResult.ok ? "text-green-accent-foreground" : "text-red-accent-foreground",
-                buildResult.revealPath && "cursor-pointer hover:underline"
-              )}
-              onClick={
-                buildResult.revealPath ? () => revealItemInDir(buildResult.revealPath!) : undefined
-              }
-              title={buildResult.revealPath ? "Click to reveal in explorer" : undefined}
-            >
-              {buildResult.ok ? (
-                <CheckCircle2 size={13} className="shrink-0" />
-              ) : (
-                <XCircle size={13} className="shrink-0" />
-              )}
-              <span className="truncate">{buildResult.msg}</span>
-            </div>
+            <Tip content="Click to reveal in explorer" disabled={!buildResult.revealPath}>
+              <div
+                className={cn(
+                  "flex items-center gap-1.5 text-xs",
+                  buildResult.ok ? "text-green-accent-foreground" : "text-red-accent-foreground",
+                  buildResult.revealPath && "cursor-pointer hover:underline"
+                )}
+                onClick={
+                  buildResult.revealPath
+                    ? () => revealItemInDir(buildResult.revealPath!)
+                    : undefined
+                }
+              >
+                {buildResult.ok ? (
+                  <CheckCircle2 size={13} className="shrink-0" />
+                ) : (
+                  <XCircle size={13} className="shrink-0" />
+                )}
+                <span className="truncate">{buildResult.msg}</span>
+              </div>
+            </Tip>
           )}
         </div>
       </div>
@@ -575,16 +579,17 @@ function SoundRow({
           </Badge>
         )}
         {slot && (
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            onClick={onClear}
-            disabled={disabled}
-            className="text-muted-foreground hover:text-err"
-            title="Remove"
-          >
-            <Trash2 size={13} />
-          </Button>
+          <Tip content="Remove">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              onClick={onClear}
+              disabled={disabled}
+              className="text-muted-foreground hover:text-err"
+            >
+              <Trash2 size={13} />
+            </Button>
+          </Tip>
         )}
       </div>
     </div>
