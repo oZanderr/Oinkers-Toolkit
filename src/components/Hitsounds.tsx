@@ -47,7 +47,7 @@ interface SlotState {
   error: string | null;
 }
 
-type SlotKey = "body_hit" | "head_hit" | "body_kill" | "head_kill";
+type SlotKey = "bodyshot_hit" | "headshot_hit" | "bodyshot_kill" | "headshot_kill";
 
 interface SlotConfig {
   key: SlotKey;
@@ -57,10 +57,10 @@ interface SlotConfig {
 }
 
 const SLOT_CONFIGS: SlotConfig[] = [
-  { key: "body_hit", label: "Bodyshot", group: "hit", icon: <Shield size={15} /> },
-  { key: "head_hit", label: "Headshot", group: "hit", icon: <Crosshair size={15} /> },
-  { key: "body_kill", label: "Bodyshot Kill", group: "kill", icon: <Skull size={15} /> },
-  { key: "head_kill", label: "Headshot Kill", group: "kill", icon: <Target size={15} /> },
+  { key: "bodyshot_hit", label: "Bodyshot", group: "hit", icon: <Shield size={15} /> },
+  { key: "headshot_hit", label: "Headshot", group: "hit", icon: <Crosshair size={15} /> },
+  { key: "bodyshot_kill", label: "Bodyshot Kill", group: "kill", icon: <Skull size={15} /> },
+  { key: "headshot_kill", label: "Headshot Kill", group: "kill", icon: <Target size={15} /> },
 ];
 
 const SLOT_KEYS: SlotKey[] = SLOT_CONFIGS.map((c) => c.key);
@@ -79,10 +79,10 @@ function formatSampleRateKHz(sampleRate: number): string {
 
 export function Hitsounds({ gamePath, isActive }: Props) {
   const [slots, setSlots] = useState<Record<SlotKey, SlotState | null>>({
-    body_hit: null,
-    head_hit: null,
-    body_kill: null,
-    head_kill: null,
+    bodyshot_hit: null,
+    headshot_hit: null,
+    bodyshot_kill: null,
+    headshot_kill: null,
   });
   const [modName, setModName] = useState("");
   const [building, setBuilding] = useState(false);
@@ -101,10 +101,10 @@ export function Hitsounds({ gamePath, isActive }: Props) {
   const dropProcessingRef = useRef(false);
   const hoveredDropSlotRef = useRef<SlotKey | null>(null);
   const slotRefs = useRef<Record<SlotKey, HTMLDivElement | null>>({
-    body_hit: null,
-    head_hit: null,
-    body_kill: null,
-    head_kill: null,
+    bodyshot_hit: null,
+    headshot_hit: null,
+    bodyshot_kill: null,
+    headshot_kill: null,
   });
 
   isActiveRef.current = isActive;

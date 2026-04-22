@@ -17,16 +17,16 @@ const BNK_MATCH: &str = "bnk_ui_battle.bnk";
 
 /// All supported hitsound slots: (WEM ID, key used in commands, human label).
 const SOUND_SLOTS: &[(u32, &str, &str)] = &[
-    (975983943, "body_hit", "bodyshot hit"),
-    (681577199, "head_hit", "headshot hit"),
-    (1066162905, "body_kill", "bodyshot kill"),
-    (1011085352, "head_kill", "headshot kill"),
+    (975983943, "bodyshot_hit", "bodyshot hit"),
+    (681577199, "headshot_hit", "headshot hit"),
+    (1066162905, "bodyshot_kill", "bodyshot kill"),
+    (1011085352, "headshot_kill", "headshot kill"),
 ];
 
 /// WEM IDs that should be replaced with silence when a related slot is provided.
 /// (companion WEM ID, triggering slot key)
 const SILENCE_COMPANIONS: &[(u32, &str)] = &[
-    (1071347262, "body_kill"), // second body kill SFX — silenced to avoid overlap
+    (1071347262, "bodyshot_kill"), // second body kill SFX — silenced to avoid overlap
 ];
 
 struct TempDirGuard {

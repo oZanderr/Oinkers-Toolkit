@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -214,7 +215,7 @@ export function Mods({
       try {
         const s = await invoke<ModsStatus>("get_mods_status", { gameRoot: gamePath });
         setModsStatus(s);
-        if (!silent) showNotice("Status refreshed", "ok", 4000);
+        if (!silent) showNotice("Mods refreshed", "ok", 4000);
         else if (s.conflicts_resolved > 0)
           showNotice(
             `Removed ${s.conflicts_resolved} outdated disabled mod${s.conflicts_resolved !== 1 ? "s" : ""} (replaced by enabled version)`,
@@ -1301,7 +1302,7 @@ export function Mods({
                                   : `${h.character_name} (character match)`
                               }
                             >
-                              <span className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-primary cursor-help truncate max-w-25">
+                              <span className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-primary truncate max-w-25">
                                 {h.character_name}
                               </span>
                             </Tip>
@@ -1313,7 +1314,7 @@ export function Mods({
                                 .map((h) => h.character_name)
                                 .join(", ")}
                             >
-                              <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-primary cursor-help">
+                              <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-primary">
                                 +{entry.heroes.length - 2}
                               </span>
                             </Tip>
@@ -1322,7 +1323,7 @@ export function Mods({
                             <Tip
                               content={`Conflicts with: ${conflictsByMod.get(entry.display_name)!.conflicts_with.join(", ")}`}
                             >
-                              <span className="shrink-0 rounded bg-warn/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-warn cursor-help">
+                              <span className="shrink-0 rounded bg-warn/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-warn">
                                 Conflict
                               </span>
                             </Tip>
@@ -1481,35 +1482,7 @@ export function Mods({
               The alphabetically first pak file wins.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="flex-1 overflow-y-auto -mx-6 px-6 space-y-3">
-            {conflictReport?.asset_conflicts.map((c) => (
-              <div
-                key={c.asset}
-                className="rounded border border-border bg-secondary/30 p-2.5 text-[12px]"
-              >
-                <Tip content={c.asset}>
-                  <p className="truncate font-mono text-[11px] text-muted-foreground">{c.asset}</p>
-                </Tip>
-                <div className="mt-1.5 flex flex-col gap-0.5">
-                  {c.mods.map((mod, i) => (
-                    <span key={mod} className="flex items-center gap-1.5">
-                      <span className="truncate">{mod}</span>
-                      {i === 0 && (
-                        <span className="shrink-0 rounded bg-ok/15 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
-                          Active
-                        </span>
-                      )}
-                      {i > 0 && (
-                        <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] font-semibold uppercase leading-none text-muted-foreground">
-                          Overridden
-                        </span>
-                      )}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+          <ConflictList conflicts={conflictReport?.asset_conflicts ?? []} />
           <AlertDialogFooter>
             <AlertDialogCancel>Close</AlertDialogCancel>
           </AlertDialogFooter>
@@ -1602,5 +1575,66 @@ function Code({ children }: { children: React.ReactNode }) {
     <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">
       {children}
     </code>
+  );
+}
+
+function ConflictList({ conflicts }: { conflicts: AssetConflict[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // TanStack Virtual returns unstable functions by design; this hook is safe here.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: conflicts.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 72,
+    overscan: 5,
+    measureElement: (el) => el.getBoundingClientRect().height,
+  });
+
+  return (
+    <div ref={scrollRef} className="flex-1 overflow-y-auto -mx-6 px-6">
+      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
+        {virtualizer.getVirtualItems().map((vRow) => {
+          const c = conflicts[vRow.index];
+          return (
+            <div
+              key={vRow.index}
+              data-index={vRow.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${vRow.start}px)`,
+              }}
+              className="pb-3"
+            >
+              <div className="rounded border border-border bg-secondary/30 p-2.5 text-[12px]">
+                <Tip content={c.asset}>
+                  <p className="truncate font-mono text-[11px] text-muted-foreground">{c.asset}</p>
+                </Tip>
+                <div className="mt-1.5 flex flex-col gap-0.5">
+                  {c.mods.map((mod, i) => (
+                    <span key={mod} className="flex items-center gap-1.5">
+                      <span className="truncate">{mod}</span>
+                      {i === 0 && (
+                        <span className="shrink-0 rounded bg-ok/15 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
+                          Active
+                        </span>
+                      )}
+                      {i > 0 && (
+                        <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] font-semibold uppercase leading-none text-muted-foreground">
+                          Overridden
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

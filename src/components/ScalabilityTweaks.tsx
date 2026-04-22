@@ -2,7 +2,16 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { Save, CheckCircle2, XCircle, FolderOpen, Search, Info, Undo2 } from "lucide-react";
+import {
+  Save,
+  CheckCircle2,
+  XCircle,
+  FolderOpen,
+  RefreshCw,
+  Search,
+  Info,
+  Undo2,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -266,14 +275,13 @@ export function ScalabilityTweaks({
                 disabled={!filePath}
                 onClick={() => filePath && openPath(filePath.replace(/[/\\][^/\\]+$/, ""))}
               >
-                <FolderOpen size={14} />
                 Show in Explorer
               </Button>
             </div>
             <div className="relative">
               <Tip content={filePath} disabled={!filePath}>
                 <Input
-                  className="h-8 pr-16 rounded-none border-0 shadow-none font-mono text-[12px] focus-visible:ring-0 focus-visible:border-0"
+                  className="pr-16 rounded-none border-0 shadow-none font-mono text-[12px] focus-visible:ring-0 focus-visible:border-0"
                   value={filePath}
                   onChange={(e) => setFilePath(e.target.value)}
                   placeholder="Path to Scalability.ini\u2026"
@@ -285,7 +293,12 @@ export function ScalabilityTweaks({
                     <FolderOpen size={14} />
                   </Button>
                 </Tip>
-                <Tip content="Auto-detect config file">
+                <Tip content="Reload from file">
+                  <Button variant="ghost" size="icon-sm" onClick={onReload} disabled={!filePath}>
+                    <RefreshCw size={14} />
+                  </Button>
+                </Tip>
+                <Tip content="Auto-detect path">
                   <Button variant="ghost" size="icon-sm" onClick={onDetect} disabled={detecting}>
                     <Search size={14} className={cn(detecting && "animate-pulse")} />
                   </Button>

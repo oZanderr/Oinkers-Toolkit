@@ -12,13 +12,6 @@ import {
   Volume2,
 } from "lucide-react";
 
-import { Separator } from "@/components/ui/separator";
-import { Tip, TooltipProvider } from "@/components/ui/tooltip";
-import { useGameRunning } from "@/hooks/useGameRunning";
-import { useUpdateCheck, type UpdateInfo } from "@/hooks/useUpdateCheck";
-import { useWebviewDefaults } from "@/hooks/useWebviewDefaults";
-import { cn } from "@/lib/utils";
-
 import { AssetManager } from "./components/AssetManager";
 import { ConfigTweaks } from "./components/ConfigTweaks";
 import { Hitsounds } from "./components/Hitsounds";
@@ -27,6 +20,13 @@ import { PakIniEditor } from "./components/PakIniEditor";
 import { Settings } from "./components/Settings";
 import { Titlebar } from "./components/Titlebar";
 import { UpdateAvailableDialog } from "./components/UpdateAvailableDialog";
+
+import { Separator } from "@/components/ui/separator";
+import { Tip, TooltipProvider } from "@/components/ui/tooltip";
+import { useGameRunning } from "@/hooks/useGameRunning";
+import { useUpdateCheck, type UpdateInfo } from "@/hooks/useUpdateCheck";
+import { useWebviewDefaults } from "@/hooks/useWebviewDefaults";
+import { cn } from "@/lib/utils";
 
 type Tab = "mod-tools" | "pak-manager" | "ini-editor" | "config-tweaks" | "hitsounds" | "settings";
 
@@ -54,11 +54,7 @@ function App() {
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(() => new Set(["mod-tools"]));
   const [version, setVersion] = useState("");
   const autoUpdateInfo = useUpdateCheck();
-  const {
-    isRunning: gameRunning,
-    ready: gameStatusReady,
-    markLaunched,
-  } = useGameRunning(activeTab === "mod-tools");
+  const { isRunning: gameRunning, ready: gameStatusReady, markLaunched } = useGameRunning(true);
   const [manualUpdateInfo, setManualUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
   const activeUpdateInfo = useMemo(
@@ -279,7 +275,11 @@ function App() {
                   activeTab !== "ini-editor" && "hidden"
                 )}
               >
-                <PakIniEditor gamePath={gamePath} isActive={activeTab === "ini-editor"} />
+                <PakIniEditor
+                  gamePath={gamePath}
+                  isActive={activeTab === "ini-editor"}
+                  gameRunning={gameRunning}
+                />
               </div>
             )}
             {mountedTabs.has("config-tweaks") && (

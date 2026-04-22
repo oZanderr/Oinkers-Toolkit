@@ -483,10 +483,17 @@ export function Settings({
                   </span>
                 )}
               </div>
-              <Button variant="outline" size="sm" onClick={syncHeroesNow} disabled={syncingHeroes}>
-                <CloudDownload size={13} className={cn(syncingHeroes && "animate-pulse")} />
-                Sync now
-              </Button>
+              <Tip content="Download the latest hero data from remote">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={syncHeroesNow}
+                  disabled={syncingHeroes}
+                >
+                  <CloudDownload size={13} className={cn(syncingHeroes && "animate-pulse")} />
+                  Sync now
+                </Button>
+              </Tip>
               <Switch
                 checked={draftAutoSyncHeroes ?? false}
                 onCheckedChange={setDraftAutoSyncHeroes}
@@ -559,15 +566,17 @@ export function Settings({
                   </span>
                 )}
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={checkUpdateNow}
-                disabled={updateChecking}
-              >
-                <RefreshCw size={13} className={cn(updateChecking && "animate-spin")} />
-                Check now
-              </Button>
+              <Tip content="Check for a new version of Rivals Toolkit right now">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={checkUpdateNow}
+                  disabled={updateChecking}
+                >
+                  <RefreshCw size={13} className={cn(updateChecking && "animate-spin")} />
+                  Check now
+                </Button>
+              </Tip>
               <Switch
                 checked={draftAutoCheck ?? false}
                 onCheckedChange={setDraftAutoCheck}

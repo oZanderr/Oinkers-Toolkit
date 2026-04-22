@@ -14,6 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  AlertTriangle,
   CheckCircle2,
   XCircle,
   RefreshCw,
@@ -64,6 +65,7 @@ type NoticeType = "ok" | "err" | "info";
 interface Props {
   gamePath: string;
   isActive: boolean;
+  gameRunning: boolean;
 }
 
 // ── Search highlight CM extension ───────────────────────────────────
@@ -130,7 +132,7 @@ const searchExtension = [searchConfigField, searchHighlightPlugin];
 
 // ── Component ───────────────────────────────────────────────────────
 
-export function PakIniEditor({ gamePath, isActive }: Props) {
+export function PakIniEditor({ gamePath, isActive, gameRunning }: Props) {
   // ── Pak selection ──
   const [paks, setPaks] = useState<PakIniInfo[]>([]);
   const [selectedPak, setSelectedPak] = useState<PakIniInfo | null>(null);
@@ -652,11 +654,9 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
           </SelectTrigger>
           <SelectContent position="popper" className="w-(--radix-select-trigger-width)">
             {paks.map((p) => (
-              <Tip key={p.pak_path} content={p.pak_name} side="right">
-                <SelectItem value={p.pak_path} className="font-mono text-xs">
-                  {p.pak_name}
-                </SelectItem>
-              </Tip>
+              <SelectItem key={p.pak_path} value={p.pak_path} className="font-mono text-xs">
+                {p.pak_name}
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -851,23 +851,35 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
           {/* Save bar — inside the editor border */}
           {isDirty && (
             <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-1.5">
-              <span className="mr-auto flex items-center gap-1.5 text-[11px] font-medium text-warn">
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warn opacity-60" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-warn" />
+              {gameRunning ? (
+                <span className="mr-auto flex items-center gap-1.5 text-[11px] font-medium text-warn">
+                  <AlertTriangle size={13} className="shrink-0" />
+                  Close the game to save changes
                 </span>
-                Unsaved
-                {dpDirty && engineDirty
-                  ? " (both files)"
-                  : dpDirty
-                    ? " (DeviceProfiles)"
-                    : " (Engine)"}
-              </span>
-              <Button variant="ghost" size="sm" onClick={reload} disabled={saving}>
+              ) : (
+                <span className="mr-auto flex items-center gap-1.5 text-[11px] font-medium text-warn">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warn opacity-60" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-warn" />
+                  </span>
+                  Unsaved
+                  {dpDirty && engineDirty
+                    ? " (both files)"
+                    : dpDirty
+                      ? " (DeviceProfiles)"
+                      : " (Engine)"}
+                </span>
+              )}
+              <Button variant="ghost" size="sm" onClick={reload} disabled={saving || gameRunning}>
                 <RefreshCw size={13} />
                 Reload
               </Button>
-              <Button variant="blue" size="sm" onClick={save} disabled={!isDirty || saving}>
+              <Button
+                variant="blue"
+                size="sm"
+                onClick={save}
+                disabled={!isDirty || saving || gameRunning}
+              >
                 {saving ? <RefreshCw size={13} className="animate-spin" /> : <Save size={13} />}
                 {saving ? "Repacking..." : "Save"}
               </Button>

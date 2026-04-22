@@ -113,6 +113,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
   } | null>(null);
   const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
   const lastClickedIndex = useRef<number | null>(null);
+  const loadGenRef = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentsScrollRef = useRef<HTMLDivElement>(null);
@@ -253,6 +254,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
 
   async function inspectPak(pak: string, infoOverride?: PakFileInfo) {
     if (pak === selectedPak) return;
+    const gen = ++loadGenRef.current;
     setSelectedPak(pak);
     setFilterText("");
     setDebouncedFilter("");
@@ -266,6 +268,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         invoke<boolean>("path_exists", { path: pak.replace(/\.pak$/i, ".utoc") }),
         invoke<boolean>("path_exists", { path: pak.replace(/\.pak$/i, ".ucas") }),
       ]);
+      if (gen !== loadGenRef.current) return;
       info = { path: pak, has_utoc: hasUtoc, has_ucas: hasUcas };
     }
     const isIoStore = info.has_utoc && info.has_ucas;
@@ -282,6 +285,8 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
             )
           : Promise.resolve({ ok: true as const, files: [] as string[] }),
       ]);
+
+      if (gen !== loadGenRef.current) return;
 
       const entries: ContentEntry[] = [];
       for (const f of pakFiles) {
@@ -302,9 +307,10 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         showNotice(`${entries.length} file(s) inside ${displayName}`, "ok");
       }
     } catch (e: unknown) {
+      if (gen !== loadGenRef.current) return;
       showNotice(String(e), "err");
     } finally {
-      setBusy(false);
+      if (gen === loadGenRef.current) setBusy(false);
     }
   }
 
@@ -643,6 +649,44 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     } catch (e: unknown) {
       showNotice(String(e), "err");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportLegacySingle(entry: ContentEntry) {
+    if (!selectedPak) return;
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || typeof dir !== "string") return;
+
+    const pakBaseName =
+      selectedPak
+        .replace(/\\/g, "/")
+        .split("/")
+        .pop()
+        ?.replace(/\.pak$/i, "") ?? "output";
+    const outputDir = `${dir}\\${pakBaseName}`;
+    const utocPath = selectedPak.replace(/\.pak$/i, ".utoc");
+    const filter = [entry.path];
+
+    setBusy(true);
+    showNotice("Counting packages\u2026", "info");
+    try {
+      const count = await invoke<number>("count_utoc_legacy_packages", {
+        utocPath,
+        gameRoot: gamePath,
+        filter,
+      });
+      setBusy(false);
+      setNotice(null);
+
+      if (count > 500) {
+        setLegacyConfirm({ count, utocPath, outputDir, filter });
+        return;
+      }
+
+      await runLegacyExtraction(utocPath, outputDir, filter);
+    } catch (e: unknown) {
+      showNotice(String(e), "err");
       setBusy(false);
     }
   }
@@ -1159,6 +1203,20 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                           <ContextMenuItem onSelect={() => extractSelected()}>
                             <PackageOpen />
                             Extract {selectedEntries.size} Selected…
+                          </ContextMenuItem>
+                        )}
+                        {entry.source === "utoc" && !entry.path.endsWith(".ubulk") && (
+                          <ContextMenuItem
+                            onSelect={() =>
+                              selectedUtocEntries.length > 0
+                                ? exportLegacySelected()
+                                : exportLegacySingle(entry)
+                            }
+                          >
+                            <FileOutput />
+                            {selectedUtocEntries.length > 1
+                              ? `Export ${selectedUtocEntries.length} Legacy (.uasset/.uexp)…`
+                              : "Export Legacy (.uasset/.uexp)…"}
                           </ContextMenuItem>
                         )}
                         <ContextMenuSeparator />
