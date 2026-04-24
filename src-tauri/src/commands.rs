@@ -2,8 +2,8 @@ use tauri::{Manager, State};
 
 use crate::settings::SettingsState;
 use crate::{
-    detect, game_status, hitsounds, launch_record, mods, pak, pak_tweaks, paths, scalability,
-    update_check, wav_to_wem,
+    audio, detect, game_status, hitsounds, launch_record, mods, pak, pak_tweaks, paths,
+    scalability, update_check,
 };
 
 #[tauri::command]
@@ -582,8 +582,8 @@ pub(crate) fn apply_mod_profile(
 }
 
 #[tauri::command]
-pub(crate) fn validate_wav(path: String) -> Result<wav_to_wem::WavValidation, String> {
-    wav_to_wem::validate_audio(std::path::Path::new(&path)).map_err(|e| e.to_string())
+pub(crate) fn validate_wav(path: String) -> Result<audio::WavValidation, String> {
+    audio::validate_audio(std::path::Path::new(&path)).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -591,15 +591,34 @@ pub(crate) fn path_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct HitsoundInputDto {
+    path: String,
+    #[serde(default)]
+    gain_db: f32,
+}
+
 #[tauri::command]
 pub(crate) async fn build_hitsound_mod(
     game_root: String,
-    wavs: std::collections::HashMap<String, String>,
+    wavs: std::collections::HashMap<String, HitsoundInputDto>,
     mod_name: String,
     output_dir: String,
 ) -> Result<String, String> {
+    let inputs: std::collections::HashMap<String, hitsounds::HitsoundInput> = wavs
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                k,
+                hitsounds::HitsoundInput {
+                    path: v.path,
+                    gain_db: v.gain_db,
+                },
+            )
+        })
+        .collect();
     tauri::async_runtime::spawn_blocking(move || {
-        hitsounds::build_hitsound_mod_to_dir(&game_root, &wavs, &mod_name, &output_dir)
+        hitsounds::build_hitsound_mod_to_dir(&game_root, &inputs, &mod_name, &output_dir)
     })
     .await
     .map_err(|e| e.to_string())?

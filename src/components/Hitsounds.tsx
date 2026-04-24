@@ -15,6 +15,7 @@ import {
   Skull,
   Package,
   Target,
+  RotateCcw,
 } from "lucide-react";
 
 import {
@@ -30,6 +31,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
 import { Tip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +47,17 @@ interface SlotState {
   name: string;
   validation: WavValidation | null;
   error: string | null;
+  gainDb: number;
+}
+
+const GAIN_MIN_DB = -12;
+const GAIN_MAX_DB = 12;
+const GAIN_STEP_DB = 0.5;
+const GAIN_DEFAULT_DB = 0;
+
+function formatGainDb(db: number): string {
+  const sign = db > 0 ? "+" : "";
+  return `${sign}${db.toFixed(1)} dB`;
 }
 
 type SlotKey = "bodyshot_hit" | "headshot_hit" | "bodyshot_kill" | "headshot_kill";
@@ -154,18 +167,39 @@ export function Hitsounds({ gamePath, isActive }: Props) {
       const isCompatible =
         (validation.channels === 1 || validation.channels === 2) &&
         validation.bits_per_sample === 16;
-      setSlot(key, {
-        path,
-        name,
-        validation,
-        error: isCompatible
-          ? null
-          : `Incompatible format (${validation.bits_per_sample}-bit, ${validation.channels}ch)`,
-      });
+      setSlots((prev) => ({
+        ...prev,
+        [key]: {
+          path,
+          name,
+          validation,
+          error: isCompatible
+            ? null
+            : `Incompatible format (${validation.bits_per_sample}-bit, ${validation.channels}ch)`,
+          gainDb: prev[key]?.gainDb ?? GAIN_DEFAULT_DB,
+        },
+      }));
     } catch (e) {
-      setSlot(key, { path, name, validation: null, error: String(e) });
+      setSlots((prev) => ({
+        ...prev,
+        [key]: {
+          path,
+          name,
+          validation: null,
+          error: String(e),
+          gainDb: prev[key]?.gainDb ?? GAIN_DEFAULT_DB,
+        },
+      }));
     }
   }, []);
+
+  function setSlotGain(key: SlotKey, gainDb: number) {
+    setSlots((prev) => {
+      const slot = prev[key];
+      if (!slot) return prev;
+      return { ...prev, [key]: { ...slot, gainDb } };
+    });
+  }
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -252,11 +286,11 @@ export function Hitsounds({ gamePath, isActive }: Props) {
   }
 
   async function runBuild(normalizedModName: string, outputDir: string, outputPakPath: string) {
-    const wavs: Record<string, string> = {};
+    const wavs: Record<string, { path: string; gain_db: number }> = {};
     for (const key of SLOT_KEYS) {
       const slot = slots[key];
       if (slot && !slot.error) {
-        wavs[key] = slot.path;
+        wavs[key] = { path: slot.path, gain_db: slot.gainDb };
       }
     }
 
@@ -336,6 +370,7 @@ export function Hitsounds({ gamePath, isActive }: Props) {
             slot={slots[config.key]}
             onPick={() => pickWav(config.key)}
             onClear={() => setSlot(config.key, null)}
+            onGainChange={(db) => setSlotGain(config.key, db)}
             formatDuration={formatDuration}
             disabled={building}
             showDropOverlay={isDragging && hoveredDropSlot === config.key}
@@ -361,6 +396,7 @@ export function Hitsounds({ gamePath, isActive }: Props) {
             slot={slots[config.key]}
             onPick={() => pickWav(config.key)}
             onClear={() => setSlot(config.key, null)}
+            onGainChange={(db) => setSlotGain(config.key, db)}
             formatDuration={formatDuration}
             disabled={building}
             showDropOverlay={isDragging && hoveredDropSlot === config.key}
@@ -482,6 +518,7 @@ function SoundRow({
   slot,
   onPick,
   onClear,
+  onGainChange,
   formatDuration,
   disabled,
   showDropOverlay,
@@ -494,6 +531,7 @@ function SoundRow({
   slot: SlotState | null;
   onPick: () => void;
   onClear: () => void;
+  onGainChange: (db: number) => void;
   formatDuration: (s: number) => string;
   disabled: boolean;
   showDropOverlay: boolean;
@@ -561,6 +599,35 @@ function SoundRow({
           <UploadCloud size={13} className="shrink-0" />
           <span className="text-xs">Drop .wav/.ogg here or click to browse</span>
         </button>
+      )}
+
+      {/* Gain column */}
+      {slot && !slot.error && (
+        <div className="flex w-52 shrink-0 items-center gap-2">
+          <Slider
+            min={GAIN_MIN_DB}
+            max={GAIN_MAX_DB}
+            step={GAIN_STEP_DB}
+            value={[slot.gainDb]}
+            onValueChange={(v) => onGainChange(v[0] ?? GAIN_DEFAULT_DB)}
+            disabled={disabled}
+            className="flex-1"
+          />
+          <span className="w-14 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+            {formatGainDb(slot.gainDb)}
+          </span>
+          <Tip content="Reset to 0 dB">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              onClick={() => onGainChange(GAIN_DEFAULT_DB)}
+              disabled={disabled || slot.gainDb === GAIN_DEFAULT_DB}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <RotateCcw size={12} />
+            </Button>
+          </Tip>
+        </div>
       )}
 
       {/* Right column */}

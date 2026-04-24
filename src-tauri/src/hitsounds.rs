@@ -6,9 +6,9 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use crate::audio;
 use crate::pak;
 use crate::pak::crypto::open_pak;
-use crate::wav_to_wem;
 
 static BNK_CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 
@@ -55,7 +55,7 @@ impl Drop for TempDirGuard {
 fn silence_wem() -> Vec<u8> {
     // 48000 Hz * 0.01s = 480 frames * 4 bytes/frame (stereo 16-bit) = 1920 bytes
     let pcm_len: u32 = 1920;
-    let mut wem = wav_to_wem::build_wem_header(pcm_len, 48000);
+    let mut wem = audio::build_wem_header(pcm_len, 48000);
     wem.resize(wem.len() + pcm_len as usize, 0);
     wem
 }
@@ -157,9 +157,15 @@ fn get_or_extract_bnk(game_root: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// Per-slot hitsound input: source audio path and optional gain in decibels.
+pub(crate) struct HitsoundInput {
+    pub path: String,
+    pub gain_db: f32,
+}
+
 pub(crate) fn build_hitsound_mod(
     game_root: &str,
-    wavs: &HashMap<String, String>,
+    wavs: &HashMap<String, HitsoundInput>,
     output_pak: &str,
 ) -> Result<String, String> {
     if wavs.is_empty() {
@@ -181,9 +187,10 @@ pub(crate) fn build_hitsound_mod(
     let mut summary_parts: Vec<String> = Vec::new();
 
     for &(wem_id, key, label) in SOUND_SLOTS {
-        if let Some(wav_path) = wavs.get(key) {
-            let (wem_bytes, _) = wav_to_wem::convert_to_bytes(Path::new(wav_path))
-                .map_err(|e| format!("{label} WAV conversion failed: {e}"))?;
+        if let Some(input) = wavs.get(key) {
+            let (wem_bytes, _) =
+                audio::convert_to_bytes_with_gain(Path::new(&input.path), input.gain_db)
+                    .map_err(|e| format!("{label} WAV conversion failed: {e}"))?;
 
             if !bnk.wems.iter().any(|w| w.id == wem_id) {
                 return Err(format!(
@@ -281,7 +288,7 @@ pub(crate) fn extract_hitsound_wavs(
             continue;
         }
 
-        let wav_bytes = crate::wav_to_wem::wem_to_wav(&wem.data)
+        let wav_bytes = crate::audio::wem_to_wav(&wem.data)
             .map_err(|e| format!("Failed to convert {label} WEM to WAV: {e}"))?;
         let out_path = out_dir.join(format!("{key}.wav"));
         fs::write(&out_path, wav_bytes)
@@ -302,7 +309,7 @@ pub(crate) fn extract_hitsound_wavs(
 
 pub(crate) fn build_hitsound_mod_to_dir(
     game_root: &str,
-    wavs: &HashMap<String, String>,
+    wavs: &HashMap<String, HitsoundInput>,
     mod_name: &str,
     output_dir: &str,
 ) -> Result<String, String> {

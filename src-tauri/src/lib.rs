@@ -1,5 +1,6 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+mod audio;
 mod commands;
 mod concurrency;
 mod detect;
@@ -7,14 +8,12 @@ mod game_status;
 mod hitsounds;
 mod launch_record;
 mod mods;
-mod ogg_to_wav;
 mod pak;
 mod pak_tweaks;
 mod paths;
 mod scalability;
 mod settings;
 mod update_check;
-mod wav_to_wem;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[allow(clippy::expect_used)]

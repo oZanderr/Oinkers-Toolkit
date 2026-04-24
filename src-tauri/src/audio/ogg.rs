@@ -1,13 +1,13 @@
-//! OGG Vorbis decoder. Decodes OGG Vorbis audio to raw 16-bit PCM using lewton.
+//! OGG Vorbis decoder. Decodes an OGG Vorbis stream to raw 16-bit PCM via lewton.
 
 use std::io::Cursor;
 
 use lewton::inside_ogg::OggStreamReader;
 
-use crate::wav_to_wem::WavValidation;
+use super::pcm::WavValidation;
 
 /// Decoded PCM output from an OGG Vorbis stream.
-pub(crate) struct DecodedOgg {
+pub(super) struct DecodedOgg {
     pub channels: u16,
     pub sample_rate: u32,
     /// Raw 16-bit little-endian PCM bytes (interleaved if stereo).
@@ -15,7 +15,7 @@ pub(crate) struct DecodedOgg {
 }
 
 /// Fully decode an OGG Vorbis buffer to 16-bit PCM.
-pub(crate) fn decode_ogg(data: &[u8]) -> Result<DecodedOgg, String> {
+pub(super) fn decode_ogg(data: &[u8]) -> Result<DecodedOgg, String> {
     let mut reader = OggStreamReader::new(Cursor::new(data))
         .map_err(|e| format!("Failed to open OGG stream: {e}"))?;
 
@@ -46,14 +46,13 @@ pub(crate) fn decode_ogg(data: &[u8]) -> Result<DecodedOgg, String> {
 }
 
 /// Validate an OGG Vorbis buffer without fully decoding (reads headers + counts samples).
-pub(crate) fn validate_ogg(data: &[u8]) -> Result<WavValidation, String> {
+pub(super) fn validate_ogg(data: &[u8]) -> Result<WavValidation, String> {
     let mut reader = OggStreamReader::new(Cursor::new(data))
         .map_err(|e| format!("Failed to open OGG stream: {e}"))?;
 
     let channels = reader.ident_hdr.audio_channels as u16;
     let sample_rate = reader.ident_hdr.audio_sample_rate;
 
-    // Count total samples by decoding all packets
     let mut total_samples: u64 = 0;
     while let Some(packet) = reader
         .read_dec_packet_itl()
