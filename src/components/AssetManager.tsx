@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useState, useRef, useMemo, useCallback, useEffect } from "react";
+import { startTransition, useState, useRef, useMemo, useCallback, useEffect } from "react";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { invoke } from "@tauri-apps/api/core";
@@ -43,6 +43,9 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
@@ -399,13 +402,16 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
 
   function selectByExtension(ext: string) {
     const lowered = `.${ext.toLowerCase()}`;
-    const matches = visible.filter((e) => e.path.toLowerCase().endsWith(lowered));
-    if (matches.length === 0) {
+    const next = new Set<string>();
+    for (const e of visible) {
+      if (e.path.toLowerCase().endsWith(lowered)) next.add(e.path);
+    }
+    if (next.size === 0) {
       showNotice(`No ${ext.toUpperCase()} files in view`, "info", { duration: 3000 });
       return;
     }
-    setSelectedEntries(new Set(matches.map((e) => e.path)));
-    showNotice(`Selected ${matches.length} ${ext.toUpperCase()} file(s)`, "ok", { duration: 3000 });
+    startTransition(() => setSelectedEntries(next));
+    showNotice(`Selected ${next.size} ${ext.toUpperCase()} file(s)`, "ok", { duration: 3000 });
   }
 
   function clearEntrySelection() {
@@ -432,6 +438,47 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         });
       }
       showNotice(`Extracted: ${outPath}`, "ok", { revealPath: outPath });
+    } catch (e: unknown) {
+      showNotice(String(e), "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function extractSingleEntryWithFolders(entry: ContentEntry) {
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || typeof dir !== "string") return;
+
+    const pakBaseName =
+      selectedPak
+        .replace(/\\/g, "/")
+        .split("/")
+        .pop()
+        ?.replace(/\.pak$/i, "") ?? "output";
+    const outputDir = `${dir}\\${pakBaseName}`;
+
+    setBusy(true);
+    showNotice("Extracting…", "info");
+    try {
+      let extracted: string[] = [];
+      if (entry.source === "utoc") {
+        const utocPath = selectedPak.replace(/\.pak$/i, ".utoc");
+        extracted = await invoke<string[]>("extract_utoc_files", {
+          utocPath,
+          fileNames: [entry.path],
+          outputDir,
+        });
+      } else {
+        extracted = await invoke<string[]>("extract_pak_files", {
+          pakPath: selectedPak,
+          fileNames: [entry.path],
+          outputDir,
+        });
+      }
+      const revealPath = extracted[0]
+        ? `${outputDir}\\${extracted[0].replace(/\//g, "\\")}`
+        : outputDir;
+      showNotice(`Extracted to ${outputDir}`, "ok", { revealPath });
     } catch (e: unknown) {
       showNotice(String(e), "err");
     } finally {
@@ -550,11 +597,13 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
   }
 
   function toggleSelectAll() {
-    setSelectedEntries((prev) => {
-      if (prev.size === visible.length && visible.every((e) => prev.has(e.path))) {
-        return new Set();
-      }
-      return new Set(visible.map((e) => e.path));
+    startTransition(() => {
+      setSelectedEntries((prev) => {
+        if (prev.size === visible.length && visible.every((e) => prev.has(e.path))) {
+          return new Set();
+        }
+        return new Set(visible.map((e) => e.path));
+      });
     });
   }
 
@@ -569,15 +618,25 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       ),
     [pakContents, selectedEntries]
   );
-
-  const hasSelectedBnk = useMemo(
-    () =>
-      [...selectedEntries].some((p) => {
-        const name = p.split("/").pop()?.toLowerCase();
-        return name === "bnk_ui_battle.bnk";
-      }),
-    [selectedEntries]
+  const selectedUtocEntriesAll = useMemo(
+    () => pakContents.filter((e) => selectedEntries.has(e.path) && e.source === "utoc"),
+    [pakContents, selectedEntries]
   );
+
+  const allVisibleSelected = useMemo(
+    () =>
+      selectedEntries.size > 0 &&
+      selectedEntries.size === visible.length &&
+      visible.every((e) => selectedEntries.has(e.path)),
+    [selectedEntries, visible]
+  );
+
+  const hasSelectedBnk = useMemo(() => {
+    for (const p of selectedEntries) {
+      if (p.split("/").pop()?.toLowerCase() === "bnk_ui_battle.bnk") return true;
+    }
+    return false;
+  }, [selectedEntries]);
 
   async function extractSelected() {
     if (selectedEntries.size === 0 || !selectedPak) return;
@@ -607,9 +666,9 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         totalFiles += extracted.length;
       }
 
-      if (selectedUtocEntries.length > 0) {
+      if (selectedUtocEntriesAll.length > 0) {
         const utocPath = selectedPak.replace(/\.pak$/i, ".utoc");
-        const names = selectedUtocEntries.map((e) => e.path);
+        const names = selectedUtocEntriesAll.map((e) => e.path);
         const extracted = await invoke<string[]>("extract_utoc_files", {
           utocPath,
           fileNames: names,
@@ -1083,11 +1142,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
             {/* Filter + select-all */}
             <div className="flex items-center gap-2">
               {selectedPak && (
-                <Tip
-                  content={
-                    selectedEntries.size === visible.length ? "Deselect all" : "Select all visible"
-                  }
-                >
+                <Tip content={allVisibleSelected ? "Deselect all" : "Select all visible"}>
                   <button
                     className={cn(
                       "flex shrink-0 items-center text-muted-foreground hover:text-foreground",
@@ -1097,8 +1152,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                   >
                     {selectedEntries.size === 0 ? (
                       <Square size={16} />
-                    ) : selectedEntries.size === visible.length &&
-                      visible.every((e) => selectedEntries.has(e.path)) ? (
+                    ) : allVisibleSelected ? (
                       <CheckSquare2 size={16} />
                     ) : (
                       <MinusSquare size={16} />
@@ -1179,31 +1233,88 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                         </div>
                       </ContextMenuTrigger>
                       <ContextMenuContent>
-                        <ContextMenuItem onSelect={() => copyToClipboard(entry.path, "path")}>
+                        <ContextMenuItem
+                          onSelect={() => {
+                            if (showExtractSelected) {
+                              const paths = [...selectedEntries].sort().join("\n");
+                              copyToClipboard(paths, `${selectedEntries.size} paths`);
+                            } else {
+                              copyToClipboard(entry.path, "path");
+                            }
+                          }}
+                        >
                           <Copy />
-                          Copy Path
-                        </ContextMenuItem>
-                        <ContextMenuItem onSelect={() => copyToClipboard(fileName, "file name")}>
-                          <FileText />
-                          Copy File Name
+                          {showExtractSelected ? `Copy ${selectedEntries.size} Paths` : "Copy Path"}
                         </ContextMenuItem>
                         <ContextMenuItem
-                          onSelect={() => copyToClipboard(folderPath, "folder path")}
-                          disabled={!folderPath}
+                          onSelect={() => {
+                            if (showExtractSelected) {
+                              const names = [...selectedEntries]
+                                .sort()
+                                .map((p) => p.split("/").pop() ?? p)
+                                .join("\n");
+                              copyToClipboard(names, `${selectedEntries.size} file names`);
+                            } else {
+                              copyToClipboard(fileName, "file name");
+                            }
+                          }}
+                        >
+                          <FileText />
+                          {showExtractSelected
+                            ? `Copy ${selectedEntries.size} File Names`
+                            : "Copy File Name"}
+                        </ContextMenuItem>
+                        <ContextMenuItem
+                          onSelect={() => {
+                            if (showExtractSelected) {
+                              const folders = [
+                                ...new Set(
+                                  [...selectedEntries].map((p) => parentDir(p)).filter(Boolean)
+                                ),
+                              ]
+                                .sort()
+                                .join("\n");
+                              copyToClipboard(folders, "folder paths");
+                            } else {
+                              copyToClipboard(folderPath, "folder path");
+                            }
+                          }}
+                          disabled={!showExtractSelected && !folderPath}
                         >
                           <Folder />
-                          Copy Folder Path
+                          {showExtractSelected ? "Copy Folder Paths" : "Copy Folder Path"}
                         </ContextMenuItem>
                         <ContextMenuSeparator />
-                        <ContextMenuItem onSelect={() => extractSingleEntry(entry)}>
-                          <Download />
-                          Extract…
-                        </ContextMenuItem>
-                        {showExtractSelected && (
+                        {showExtractSelected ? (
                           <ContextMenuItem onSelect={() => extractSelected()}>
                             <PackageOpen />
                             Extract {selectedEntries.size} Selected…
                           </ContextMenuItem>
+                        ) : (
+                          <ContextMenuSub>
+                            <ContextMenuSubTrigger>
+                              <Download />
+                              Extract
+                            </ContextMenuSubTrigger>
+                            <ContextMenuSubContent>
+                              <ContextMenuItem onSelect={() => extractSingleEntry(entry)}>
+                                <FileText />
+                                File only…
+                              </ContextMenuItem>
+                              <ContextMenuItem
+                                onSelect={() => extractSingleEntryWithFolders(entry)}
+                              >
+                                <Folder />
+                                With folder structure…
+                              </ContextMenuItem>
+                              {fileName.toLowerCase() === "bnk_ui_battle.bnk" && (
+                                <ContextMenuItem onSelect={() => extractSoundWavs()}>
+                                  <FileAudio />
+                                  WAVs from BNK…
+                                </ContextMenuItem>
+                              )}
+                            </ContextMenuSubContent>
+                          </ContextMenuSub>
                         )}
                         {entry.source === "utoc" && !entry.path.endsWith(".ubulk") && (
                           <ContextMenuItem
