@@ -24,9 +24,11 @@ import {
   RefreshCw,
   Search,
   Square,
+  Users,
   XCircle,
 } from "lucide-react";
 
+import { HeroIcon } from "@/components/HeroIcon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -58,7 +60,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tip } from "@/components/ui/tooltip";
+import {
+  ALL_CATEGORIES,
+  type AssetCategory,
+  CATEGORY_BG_COLOR,
+  CATEGORY_LABEL,
+  CATEGORY_TEXT_COLOR,
+  classifyAssetPath,
+} from "@/lib/assetCategory";
+import { detectHeroIdsInPath } from "@/lib/heroIcons";
 import { emitModsChanged, normalizeFolderPath, onModsChanged } from "@/lib/modsEvents";
+import { useShowHeroIcons } from "@/lib/showHeroIcons";
 import { cn } from "@/lib/utils";
 
 type RepackFormat = "pak" | "iostore";
@@ -75,6 +87,11 @@ type ContentSource = "pak" | "utoc";
 interface ContentEntry {
   path: string;
   source: ContentSource;
+}
+
+interface CharacterSummary {
+  id: number;
+  name: string;
 }
 
 interface Props {
@@ -116,17 +133,30 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     total: number;
   } | null>(null);
   const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
+  const [knownHeroes, setKnownHeroes] = useState<CharacterSummary[]>([]);
+  const [heroFilter, setHeroFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState<Set<AssetCategory>>(
+    () => new Set(ALL_CATEGORIES)
+  );
+  const showHeroIcons = useShowHeroIcons();
   const lastClickedIndex = useRef<number | null>(null);
   const loadGenRef = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentsScrollRef = useRef<HTMLDivElement>(null);
-  const listPaksRef = useRef<() => Promise<void>>(null!);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listPaksRef = useRef<(silent?: boolean) => Promise<void>>(null!);
 
   // Load game paks on mount
   useEffect(() => {
     if (gamePath) listPaks();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    invoke<CharacterSummary[]>("list_known_heroes")
+      .then(setKnownHeroes)
+      .catch(() => setKnownHeroes([]));
+  }, []);
 
   // Re-list paks when ~mods composition changes elsewhere (mod install/delete, repack, recursive toggle).
   useEffect(() => {
@@ -134,7 +164,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       if (!gamePath) return;
       const modsFolder = `${gamePath}\\MarvelGame\\Marvel\\Content\\Paks\\~mods`;
       if (normalizeFolderPath(event.modsFolder) !== normalizeFolderPath(modsFolder)) return;
-      listPaksRef.current();
+      listPaksRef.current(true);
     });
   }, [gamePath]);
 
@@ -204,12 +234,84 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     [pakContents]
   );
 
-  // Filter against pre-lowered names, debounced input
+  const knownHeroIds = useMemo(() => new Set(knownHeroes.map((h) => h.id)), [knownHeroes]);
+  const heroNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const h of knownHeroes) m.set(h.id, h.name);
+    return m;
+  }, [knownHeroes]);
+
+  // Detect heroes per asset path once per pak load. Cheap (regex + split), but
+  // 50k+ entries warrants caching so virtualizer scroll stays smooth.
+  const heroesByPath = useMemo(() => {
+    if (knownHeroIds.size === 0 || pakContents.length === 0) {
+      return new Map<string, number[]>();
+    }
+    const map = new Map<string, number[]>();
+    for (const e of pakContents) {
+      const ids = detectHeroIdsInPath(e.path, knownHeroIds);
+      if (ids.length > 0) map.set(e.path, ids);
+    }
+    return map;
+  }, [pakContents, knownHeroIds]);
+
+  const categoriesByPath = useMemo(() => {
+    const map = new Map<string, AssetCategory>();
+    for (const e of pakContents) map.set(e.path, classifyAssetPath(e.path));
+    return map;
+  }, [pakContents]);
+
+  const categoryCounts = useMemo(() => {
+    const counts = Object.fromEntries(ALL_CATEGORIES.map((c) => [c, 0])) as Record<
+      AssetCategory,
+      number
+    >;
+    for (const c of categoriesByPath.values()) counts[c]++;
+    return counts;
+  }, [categoriesByPath]);
+
+  const allCategoriesOn = categoryFilter.size === ALL_CATEGORIES.length;
+
+  // Filter against pre-lowered names, debounced input, hero, and category.
   const visible = useMemo(() => {
-    if (!debouncedFilter) return pakContents;
-    const needle = debouncedFilter.toLowerCase();
-    return pakContents.filter((_, i) => pakContentsLower[i].includes(needle));
-  }, [pakContents, pakContentsLower, debouncedFilter]);
+    let list: ContentEntry[] = pakContents;
+    if (debouncedFilter) {
+      const needle = debouncedFilter.toLowerCase();
+      list = pakContents.filter((_, i) => pakContentsLower[i].includes(needle));
+    }
+    if (heroFilter === "unknown") {
+      list = list.filter((e) => !heroesByPath.has(e.path));
+    } else if (heroFilter !== "all") {
+      const id = Number(heroFilter);
+      list = list.filter((e) => heroesByPath.get(e.path)?.includes(id) ?? false);
+    }
+    if (!allCategoriesOn) {
+      list = list.filter((e) => categoryFilter.has(categoriesByPath.get(e.path) ?? "other"));
+    }
+    return list;
+  }, [
+    pakContents,
+    pakContentsLower,
+    debouncedFilter,
+    heroFilter,
+    heroesByPath,
+    categoryFilter,
+    categoriesByPath,
+    allCategoriesOn,
+  ]);
+
+  const toggleCategory = useCallback((cat: AssetCategory) => {
+    setCategoryFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  }, []);
+
+  const setAllCategories = useCallback((on: boolean) => {
+    setCategoryFilter(on ? new Set(ALL_CATEGORIES) : new Set());
+  }, []);
 
   // Debounce filter input (150ms)
   const onFilterChange = useCallback((value: string) => {
@@ -233,12 +335,14 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
 
   listPaksRef.current = listPaks;
 
-  async function listPaks() {
-    setNotice(null);
-    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+  async function listPaks(silent = false) {
+    if (!silent) {
+      setNotice(null);
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    }
 
     if (!gamePath) {
-      showNotice("Set game root in Settings first.", "err");
+      if (!silent) showNotice("Set game root in Settings first.", "err");
       return;
     }
 
@@ -250,7 +354,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       if (paks.length === 0) {
         setSelectedPak("");
         setPakContents([]);
-        showNotice("No .pak files found.", "err");
+        if (!silent) showNotice("No .pak files found.", "err");
       } else {
         if (selectedPak && !paks.some((p) => p.path === selectedPak)) {
           setSelectedPak("");
@@ -258,12 +362,13 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
           setFilterText("");
           setDebouncedFilter("");
         }
-        showNotice(`${paks.length} pak${paks.length !== 1 ? "s" : ""} found`, "ok", {
-          duration: 4000,
-        });
+        if (!silent)
+          showNotice(`${paks.length} pak${paks.length !== 1 ? "s" : ""} found`, "ok", {
+            duration: 4000,
+          });
       }
     } catch (e: unknown) {
-      showNotice(String(e), "err");
+      if (!silent) showNotice(String(e), "err");
     } finally {
       setBusy(false);
     }
@@ -621,6 +726,26 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     });
   }
 
+  // Ctrl/Cmd+A selects all visible asset rows. Skips when focus is inside an
+  // input/textarea/contentEditable so native text-select still works, and
+  // skips when AssetManager is in a hidden tab (offsetParent === null).
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || e.key !== "a") return;
+      const root = rootRef.current;
+      if (!root || root.offsetParent === null) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (visible.length === 0) return;
+      e.preventDefault();
+      startTransition(() => {
+        setSelectedEntries(new Set(visible.map((entry) => entry.path)));
+      });
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [visible]);
+
   const selectedPakEntries = useMemo(
     () => pakContents.filter((e) => selectedEntries.has(e.path) && e.source === "pak"),
     [pakContents, selectedEntries]
@@ -868,7 +993,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       : `${visible.length} file(s)${visible.length !== pakContents.length ? ` of ${pakContents.length}` : ""} inside ${pakName} \u2014 click to select, double-click to extract`;
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col gap-4">
+    <div ref={rootRef} className="flex flex-1 min-h-0 flex-col gap-4">
       <div className="flex min-h-8 shrink-0 items-center gap-3">
         <h2 className="shrink-0 text-xl font-bold">Asset Manager</h2>
         {notice && (
@@ -987,7 +1112,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                   </Button>
                 </Tip>
                 <Tip content="Refresh game paks">
-                  <Button variant="ghost" size="icon-sm" onClick={listPaks} disabled={busy}>
+                  <Button variant="ghost" size="icon-sm" onClick={() => listPaks()} disabled={busy}>
                     <RefreshCw size={15} />
                   </Button>
                 </Tip>
@@ -1173,11 +1298,11 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                     onClick={toggleSelectAll}
                   >
                     {selectedEntries.size === 0 ? (
-                      <Square size={16} />
+                      <Square size={14} />
                     ) : allVisibleSelected ? (
-                      <CheckSquare2 size={16} />
+                      <CheckSquare2 size={14} />
                     ) : (
-                      <MinusSquare size={16} />
+                      <MinusSquare size={14} />
                     )}
                   </button>
                 </Tip>
@@ -1188,14 +1313,74 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                   className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
                 />
                 <Input
-                  className="pl-7 font-mono text-xs"
+                  className="h-8 pl-7 font-mono text-xs"
                   placeholder="Filter files…"
                   value={filterText}
                   onChange={(e) => onFilterChange(e.target.value)}
                   disabled={!selectedPak}
                 />
               </div>
+              <Select value={heroFilter} onValueChange={setHeroFilter} disabled={!selectedPak}>
+                <Tip content="Filter assets by hero">
+                  <SelectTrigger size="sm" className="w-42.5 px-2 text-[12px]">
+                    <Users size={12} className="text-muted-foreground" />
+                    <SelectValue placeholder="All heroes" />
+                  </SelectTrigger>
+                </Tip>
+                <SelectContent className="max-h-72">
+                  <SelectItem value="all">All heroes</SelectItem>
+                  <SelectItem value="unknown">Unknown / no match</SelectItem>
+                  {knownHeroes.map((h) => (
+                    <SelectItem key={h.id} value={String(h.id)}>
+                      <span className="flex items-center gap-2">
+                        <HeroIcon characterId={h.id} name={h.name} size={16} />
+                        {h.name}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
+
+            {/* Category chip row */}
+            {selectedPak && (
+              <div className="flex flex-wrap items-center gap-1">
+                <button
+                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground hover:text-foreground"
+                  onClick={() => setAllCategories(true)}
+                  disabled={allCategoriesOn}
+                >
+                  All
+                </button>
+                <button
+                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground hover:text-foreground"
+                  onClick={() => setAllCategories(false)}
+                  disabled={categoryFilter.size === 0}
+                >
+                  None
+                </button>
+                <span className="mx-1 h-3 w-px bg-border" />
+                {ALL_CATEGORIES.filter((c) => categoryCounts[c] > 0).map((cat) => {
+                  const active = categoryFilter.has(cat);
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => toggleCategory(cat)}
+                      className={cn(
+                        "flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase transition-opacity",
+                        CATEGORY_BG_COLOR[cat],
+                        CATEGORY_TEXT_COLOR[cat],
+                        active ? "opacity-100" : "opacity-30 hover:opacity-60"
+                      )}
+                      title={`${CATEGORY_LABEL[cat]} (${categoryCounts[cat]})`}
+                    >
+                      <span>{CATEGORY_LABEL[cat]}</span>
+                      <span className="text-[9px] opacity-70">{categoryCounts[cat]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* File list — always rendered */}
@@ -1243,9 +1428,34 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                           ) : (
                             <Square size={13} className="shrink-0 text-muted-foreground/50" />
                           )}
-                          <span className="shrink-0 text-muted-foreground">
-                            {fileIcon(entry.path)}
-                          </span>
+                          {(() => {
+                            const cat = categoriesByPath.get(entry.path) ?? "other";
+                            return (
+                              <Tip content={CATEGORY_LABEL[cat]} side="top" align="start">
+                                <span className={cn("shrink-0", CATEGORY_TEXT_COLOR[cat])}>
+                                  <Package size={12} />
+                                </span>
+                              </Tip>
+                            );
+                          })()}
+                          {showHeroIcons &&
+                            (() => {
+                              const ids = heroesByPath.get(entry.path);
+                              if (!ids || ids.length === 0) return null;
+                              return (
+                                <span className="flex shrink-0 items-center -space-x-1">
+                                  {ids.slice(0, 2).map((id) => (
+                                    <HeroIcon
+                                      key={id}
+                                      characterId={id}
+                                      name={heroNameById.get(id)}
+                                      size={16}
+                                      className="ring-1 ring-background"
+                                    />
+                                  ))}
+                                </span>
+                              );
+                            })()}
                           <span className="truncate font-mono text-[11px]">{entry.path}</span>
                           {entry.source === "utoc" && (
                             <span className="ml-auto shrink-0 rounded bg-ok/15 px-1 py-0.5 text-[8px] font-semibold uppercase leading-none text-ok">
@@ -1422,25 +1632,4 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       </AlertDialog>
     </div>
   );
-}
-
-function fileIcon(name: string): React.ReactNode {
-  const ext = name.split(".").pop()?.toLowerCase();
-  const cls = "shrink-0";
-  switch (ext) {
-    case "uasset":
-      return <Package size={12} className={cn(cls, "text-blue-400")} />;
-    case "umap":
-      return <Package size={12} className={cn(cls, "text-purple-400")} />;
-    case "png":
-    case "jpg":
-      return <Package size={12} className={cn(cls, "text-green-400")} />;
-    case "wav":
-    case "ogg":
-      return <Package size={12} className={cn(cls, "text-yellow-400")} />;
-    case "pak":
-      return <Package size={12} className={cn(cls, "text-orange-400")} />;
-    default:
-      return <Package size={12} className={cn(cls, "text-muted-foreground")} />;
-  }
 }

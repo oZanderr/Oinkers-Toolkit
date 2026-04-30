@@ -30,6 +30,7 @@ import {
   Search,
 } from "lucide-react";
 
+import { HeroIcon } from "@/components/HeroIcon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -60,6 +61,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tip } from "@/components/ui/tooltip";
 import { emitModsChanged, normalizeFolderPath, onModsChanged } from "@/lib/modsEvents";
+import { useShowHeroIcons } from "@/lib/showHeroIcons";
 import { cn } from "@/lib/utils";
 
 interface HeroMatch {
@@ -169,6 +171,7 @@ export function Mods({
     type: StatusType;
     revealPath?: string;
   } | null>(null);
+  const showHeroIcons = useShowHeroIcons();
   const [busyMods, setBusyMods] = useState<Set<string>>(new Set());
   const [isExporting, setIsExporting] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -1125,7 +1128,10 @@ export function Mods({
                       <SelectItem value="unknown">Unknown / no match</SelectItem>
                       {knownHeroes.map((h) => (
                         <SelectItem key={h.id} value={String(h.id)}>
-                          {h.name}
+                          <span className="flex items-center gap-2">
+                            <HeroIcon characterId={h.id} name={h.name} size={16} />
+                            {h.name}
+                          </span>
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -1370,31 +1376,74 @@ export function Mods({
                               )}
                             </span>
                           </Tip>
-                          {entry.heroes.slice(0, 2).map((h) => (
+                          {entry.heroes.length === 1 && (
                             <Tip
-                              key={h.character_id}
                               content={
-                                h.skin_names.length > 0
-                                  ? `${h.character_name}: ${h.skin_names.join(", ")}`
-                                  : `${h.character_name} (character match)`
+                                entry.heroes[0].skin_names.length > 0
+                                  ? `${entry.heroes[0].character_name}: ${entry.heroes[0].skin_names.join(", ")}`
+                                  : entry.heroes[0].character_name
                               }
                             >
-                              <span className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-primary truncate max-w-25">
-                                {h.character_name}
+                              <span
+                                className={cn(
+                                  "flex shrink-0 items-center gap-1.5 rounded-full bg-primary/10 py-0.5 pr-2 text-[11px] font-medium text-foreground",
+                                  showHeroIcons ? "pl-0.5" : "pl-2"
+                                )}
+                              >
+                                {showHeroIcons && (
+                                  <HeroIcon
+                                    characterId={entry.heroes[0].character_id}
+                                    name={entry.heroes[0].character_name}
+                                    size={18}
+                                  />
+                                )}
+                                <span className="max-w-32 truncate">
+                                  {entry.heroes[0].character_name}
+                                </span>
                               </span>
                             </Tip>
-                          ))}
-                          {entry.heroes.length > 2 && (
-                            <Tip
-                              content={entry.heroes
-                                .slice(2)
-                                .map((h) => h.character_name)
-                                .join(", ")}
-                            >
-                              <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-primary">
-                                +{entry.heroes.length - 2}
+                          )}
+                          {entry.heroes.length > 1 && !showHeroIcons && (
+                            <Tip content={entry.heroes.map((h) => h.character_name).join(", ")}>
+                              <span className="flex shrink-0 items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-foreground">
+                                <span className="max-w-32 truncate">
+                                  {entry.heroes[0].character_name}
+                                </span>
+                                <span className="ml-1 text-muted-foreground">
+                                  +{entry.heroes.length - 1}
+                                </span>
                               </span>
                             </Tip>
+                          )}
+                          {entry.heroes.length > 1 && showHeroIcons && (
+                            <span className="flex shrink-0 items-center -space-x-1">
+                              {entry.heroes.slice(0, 4).map((h) => (
+                                <HeroIcon
+                                  key={h.character_id}
+                                  characterId={h.character_id}
+                                  name={h.character_name}
+                                  size={20}
+                                  tooltip={
+                                    h.skin_names.length > 0
+                                      ? `${h.character_name}: ${h.skin_names.join(", ")}`
+                                      : h.character_name
+                                  }
+                                  className="ring-2 ring-background"
+                                />
+                              ))}
+                              {entry.heroes.length > 4 && (
+                                <Tip
+                                  content={entry.heroes
+                                    .slice(4)
+                                    .map((h) => h.character_name)
+                                    .join(", ")}
+                                >
+                                  <span className="ml-0.5 flex h-5 shrink-0 items-center justify-center rounded-full bg-secondary/80 px-1.5 text-[10px] font-semibold leading-none text-foreground ring-2 ring-background">
+                                    +{entry.heroes.length - 4}
+                                  </span>
+                                </Tip>
+                              )}
+                            </span>
                           )}
                           {conflictsByMod.has(entry.display_name) && (
                             <Tip

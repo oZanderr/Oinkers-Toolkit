@@ -48,6 +48,8 @@ pub(crate) struct Settings {
     pub(crate) recursive_mod_scan: bool,
     #[serde(default = "default_true")]
     pub(crate) auto_sync_character_data: bool,
+    #[serde(default = "default_true")]
+    pub(crate) show_hero_icons: bool,
     #[serde(default)]
     pub(crate) last_character_data_sync: u64,
     #[serde(default)]
@@ -64,7 +66,7 @@ pub(crate) struct Settings {
 
 /// Current hero detector version. Bump when matching logic changes meaningfully
 /// or the cache entry shape changes so stale entries get discarded on load.
-pub(crate) const MOD_HERO_CACHE_VERSION: u32 = 1;
+pub(crate) const MOD_HERO_CACHE_VERSION: u32 = 4;
 
 fn default_true() -> bool {
     true
@@ -76,6 +78,7 @@ impl Default for Settings {
             auto_check_updates: true,
             recursive_mod_scan: true,
             auto_sync_character_data: true,
+            show_hero_icons: true,
             last_character_data_sync: 0,
             game_path: None,
             install_info: None,
@@ -152,6 +155,21 @@ pub(crate) fn set_recursive_mod_scan(
 ) -> Result<(), String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     guard.recursive_mod_scan = enabled;
+    guard.save()
+}
+
+#[tauri::command]
+pub(crate) fn get_show_hero_icons(state: State<'_, SettingsState>) -> bool {
+    state.lock().map(|s| s.show_hero_icons).unwrap_or(true)
+}
+
+#[tauri::command]
+pub(crate) fn set_show_hero_icons(
+    state: State<'_, SettingsState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    guard.show_hero_icons = enabled;
     guard.save()
 }
 

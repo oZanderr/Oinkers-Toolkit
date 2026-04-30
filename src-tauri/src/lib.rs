@@ -38,6 +38,8 @@ pub fn run() {
             // settings
             settings::get_recursive_mod_scan,
             settings::set_recursive_mod_scan,
+            settings::get_show_hero_icons,
+            settings::set_show_hero_icons,
             settings::get_game_path,
             settings::get_saved_install_info,
             settings::set_game_path,

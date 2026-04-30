@@ -21,6 +21,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tip } from "@/components/ui/tooltip";
 import type { UpdateInfo } from "@/hooks/useUpdateCheck";
 import { emitModsChanged } from "@/lib/modsEvents";
+import { setShowHeroIcons } from "@/lib/showHeroIcons";
 import { cn } from "@/lib/utils";
 
 interface InstallInfo {
@@ -86,6 +87,8 @@ export function Settings({
   const [savedRecursive, setSavedRecursive] = useState<boolean | null>(null);
   const [draftAutoSyncHeroes, setDraftAutoSyncHeroes] = useState<boolean | null>(null);
   const [savedAutoSyncHeroes, setSavedAutoSyncHeroes] = useState<boolean | null>(null);
+  const [draftShowHeroIcons, setDraftShowHeroIcons] = useState<boolean | null>(null);
+  const [savedShowHeroIcons, setSavedShowHeroIcons] = useState<boolean | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
@@ -188,6 +191,19 @@ export function Settings({
   }, []);
 
   useEffect(() => {
+    invoke<boolean>("get_show_hero_icons")
+      .then((v) => {
+        setDraftShowHeroIcons(v);
+        setSavedShowHeroIcons(v);
+      })
+      .catch((e) => {
+        console.error(e);
+        setDraftShowHeroIcons(true);
+        setSavedShowHeroIcons(true);
+      });
+  }, []);
+
+  useEffect(() => {
     invoke<CharacterDataInfo>("get_character_data_info")
       .then(setCharacterDataInfo)
       .catch(() => setCharacterDataInfo(null));
@@ -273,7 +289,17 @@ export function Settings({
     draftAutoSyncHeroes !== null &&
     savedAutoSyncHeroes !== null &&
     draftAutoSyncHeroes !== savedAutoSyncHeroes;
-  const dirty = pathDirty || skipDirty || autoCheckDirty || recursiveDirty || autoSyncHeroesDirty;
+  const showHeroIconsDirty =
+    draftShowHeroIcons !== null &&
+    savedShowHeroIcons !== null &&
+    draftShowHeroIcons !== savedShowHeroIcons;
+  const dirty =
+    pathDirty ||
+    skipDirty ||
+    autoCheckDirty ||
+    recursiveDirty ||
+    autoSyncHeroesDirty ||
+    showHeroIconsDirty;
 
   async function save() {
     setSaving(true);
@@ -333,6 +359,14 @@ export function Settings({
           console.error(e);
         }
       }
+      if (showHeroIconsDirty && draftShowHeroIcons !== null) {
+        try {
+          await setShowHeroIcons(draftShowHeroIcons);
+          setSavedShowHeroIcons(draftShowHeroIcons);
+        } catch (e) {
+          console.error(e);
+        }
+      }
       if (savedBadgeTimer.current) clearTimeout(savedBadgeTimer.current);
       setSavedBadge(true);
       savedBadgeTimer.current = setTimeout(() => setSavedBadge(false), 2500);
@@ -347,6 +381,7 @@ export function Settings({
     setDraftAutoCheck(savedAutoCheck);
     setDraftRecursive(savedRecursive);
     setDraftAutoSyncHeroes(savedAutoSyncHeroes);
+    setDraftShowHeroIcons(savedShowHeroIcons);
     setPathError(null);
   }
 
@@ -461,6 +496,19 @@ export function Settings({
                 checked={draftRecursive ?? false}
                 onCheckedChange={setDraftRecursive}
                 disabled={draftRecursive === null}
+              />
+            </label>
+            <label className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
+              <div className="flex flex-1 flex-col gap-0.5">
+                <span className="text-[13px] font-medium">Show hero icons</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Show hero portraits next to mods and asset entries.
+                </span>
+              </div>
+              <Switch
+                checked={draftShowHeroIcons ?? false}
+                onCheckedChange={setDraftShowHeroIcons}
+                disabled={draftShowHeroIcons === null}
               />
             </label>
             <div className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">

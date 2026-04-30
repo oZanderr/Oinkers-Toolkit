@@ -135,6 +135,13 @@ pub(crate) fn repack_iostore(
 
         let mounted_path: UEPathBuf = format!("{MOUNT_POINT}{ue_path}").into();
         packed_paths.push(ue_path.to_string());
+        packed_paths.push(ue_path.with_extension("uexp").to_string());
+        for ext in ["ubulk", "uptnl", "m.ubulk"] {
+            let sibling = ue_path.with_extension(ext);
+            if files_set.contains(&sibling) {
+                packed_paths.push(sibling.to_string());
+            }
+        }
 
         let mut converted = zen_asset_conversion::build_zen_asset(
             bundle,

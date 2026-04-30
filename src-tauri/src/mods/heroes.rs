@@ -168,15 +168,30 @@ pub(crate) fn list_known_characters() -> Vec<CharacterSummary> {
     out
 }
 
-/// Two-rule detector applied per asset path:
+/// Three-rule detector applied per asset path:
 /// 1. Anchor-then-id: `.../Characters/<HEROID>/[<SKINID>/...]`
 ///    or `.../AbilitySystem/<HEROID>/...`. HEROID = 4 digits, SKINID = 7 digits.
 /// 2. Embedded 7-digit skin token: any segment contains a 7-digit run between
 ///    non-digit boundaries. Catches `bnk_vo_<SKINID>.bnk`, `<SKINID>` segments,
 ///    `Materials/<SKINID>/Mat.uasset`, etc. Char id = skin / 1000.
+/// 3. UI textures (`/UI/Textures/`): if any path segment is exactly a 4-digit
+///    catalogue char id (e.g. `Mastery/Reduce/1011/...`), that segment pins
+///    ownership and the filename is not scanned (mastery filenames reference
+///    other heroes by id but belong to the folder's hero). Otherwise slide a
+///    4-digit window through every digit token, taking the FIRST window that
+///    matches the catalogue per token, so a single id like `1055103205` resolves
+///    to one hero (1055) instead of also matching incidental substrings (1032 at
+///    position 4). Multi-hero filenames use the literal `and` separator, which
+///    splits the digit run into independent tokens (`10515040and10558000` →
+///    `10515040` and `10558000` scanned separately).
+///
+/// Under `/UI/Textures/`, certain non-character subdirs (`Career`, `Depot`) embed
+/// digit tokens that look like char/skin ids but aren't hero attribution
+/// (achievement tiers, store themes). Both rules 2 and 3 are suppressed for
+/// those paths.
 ///
 /// Skips paths under `/environment/` (map decoration referencing characters).
-fn detect_in_path(path: &str) -> Vec<(u32, Option<u32>)> {
+fn detect_in_path(path: &str, known_chars: &HashSet<u32>) -> Vec<(u32, Option<u32>)> {
     let normalized = path.replace('\\', "/").to_ascii_lowercase();
     if normalized.contains("/environment/") {
         return Vec::new();
@@ -184,6 +199,10 @@ fn detect_in_path(path: &str) -> Vec<(u32, Option<u32>)> {
 
     let segments: Vec<&str> = normalized.split('/').collect();
     let mut hits: Vec<(u32, Option<u32>)> = Vec::new();
+    let mut anchored_chars: HashSet<u32> = HashSet::new();
+
+    let in_ui_textures = normalized.contains("/ui/textures/");
+    let ui_denylisted = in_ui_textures && segments.iter().any(|s| matches!(*s, "career" | "depot"));
 
     for (i, seg) in segments.iter().enumerate() {
         if (*seg == "characters" || *seg == "abilitysystem")
@@ -191,13 +210,58 @@ fn detect_in_path(path: &str) -> Vec<(u32, Option<u32>)> {
         {
             let skin_id = segments.get(i + 2).and_then(|s| parse_digits(s, 7));
             hits.push((char_id, skin_id));
+            anchored_chars.insert(char_id);
         }
     }
 
-    for seg in &segments {
-        for tok in seg.split(|c: char| !c.is_ascii_digit()) {
-            if let Some(skin_id) = parse_digits(tok, 7) {
-                hits.push((skin_id / 1000, Some(skin_id)));
+    if !ui_denylisted {
+        // When path is anchored to a character (Characters/<id>/ or
+        // AbilitySystem/<id>/), only accept 7-digit skin tokens that belong to
+        // that character. Filenames frequently embed unrelated character ids
+        // (e.g. shared VFX `NS_1034300_*` referenced from char 1036's folder).
+        // Multi-hero `and` separator filenames use 8-digit tokens and are
+        // handled by the UI-textures window scan below, not this rule.
+        for seg in &segments {
+            for tok in seg.split(|c: char| !c.is_ascii_digit()) {
+                if let Some(skin_id) = parse_digits(tok, 7) {
+                    let char_id = skin_id / 1000;
+                    if anchored_chars.is_empty() || anchored_chars.contains(&char_id) {
+                        hits.push((char_id, Some(skin_id)));
+                    }
+                }
+            }
+        }
+    }
+
+    if in_ui_textures && !ui_denylisted {
+        let mut segment_anchors: Vec<u32> = Vec::new();
+        for seg in &segments {
+            if let Some(c) = parse_digits(seg, 4)
+                && known_chars.contains(&c)
+            {
+                segment_anchors.push(c);
+            }
+        }
+
+        if !segment_anchors.is_empty() {
+            for c in segment_anchors {
+                hits.push((c, None));
+            }
+        } else {
+            for seg in &segments {
+                for tok in seg.split(|c: char| !c.is_ascii_digit()) {
+                    if tok.len() < 4 {
+                        continue;
+                    }
+                    for start in 0..=tok.len() - 4 {
+                        if let Some(char_id) = parse_digits(&tok[start..start + 4], 4)
+                            && known_chars.contains(&char_id)
+                        {
+                            hits.push((char_id, None));
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
@@ -219,9 +283,10 @@ where
     S: AsRef<str>,
 {
     let cat = catalogue_data();
+    let known_chars: HashSet<u32> = cat.characters.keys().copied().collect();
     let mut by_char: HashMap<u32, HashSet<u32>> = HashMap::new();
     for path in paths {
-        for (char_id, skin_id) in detect_in_path(path.as_ref()) {
+        for (char_id, skin_id) in detect_in_path(path.as_ref(), &known_chars) {
             // Drop hits whose char id isn't a known hero. Suppresses random
             // 7-digit tokens (UE asset hashes, etc.) that happen to look like skin ids.
             if !cat.characters.contains_key(&char_id) {
@@ -537,27 +602,44 @@ pub(crate) async fn rescan_mod_heroes(
 mod tests {
     use super::*;
 
+    fn known() -> HashSet<u32> {
+        [
+            1011, 1015, 1016, 1026, 1032, 1033, 1047, 1051, 1054, 1055, 1056, 1065,
+        ]
+        .into_iter()
+        .collect()
+    }
+
     #[test]
     fn matches_characters_anchor_with_skin() {
-        let hits = detect_in_path("Marvel/Content/Marvel/Characters/1054/1054001/Mesh.uasset");
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/Characters/1054/1054001/Mesh.uasset",
+            &known(),
+        );
         assert!(hits.contains(&(1054, Some(1_054_001))));
     }
 
     #[test]
     fn matches_characters_anchor_without_skin() {
-        let hits = detect_in_path("Marvel/Content/Marvel/Characters/1011/Shared/foo.uasset");
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/Characters/1011/Shared/foo.uasset",
+            &known(),
+        );
         assert!(hits.contains(&(1011, None)));
     }
 
     #[test]
     fn matches_abilitysystem_anchor() {
-        let hits = detect_in_path("Marvel/Content/Marvel/AbilitySystem/1033/Skills/Foo.uasset");
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/AbilitySystem/1033/Skills/Foo.uasset",
+            &known(),
+        );
         assert!(hits.contains(&(1033, None)));
     }
 
     #[test]
     fn matches_embedded_skin_id_in_filename() {
-        let hits = detect_in_path("WwiseAudio/Media/bnk_vo_1054001.bnk");
+        let hits = detect_in_path("WwiseAudio/Media/bnk_vo_1054001.bnk", &known());
         assert!(hits.contains(&(1054, Some(1_054_001))));
     }
 
@@ -565,21 +647,39 @@ mod tests {
     fn matches_embedded_skin_id_in_split_path() {
         let hits = detect_in_path(
             "Marvel/Content/Marvel/VFX/Materials/Characters/1033/Materials/1033502/Mat.uasset",
+            &known(),
         );
         assert!(hits.contains(&(1033, Some(1_033_502))));
+    }
+
+    #[test]
+    fn anchor_suppresses_unrelated_filename_skin_token() {
+        // Shared VFX folder under char 1036 references char 1034's skin id in
+        // the filename. Anchor pins ownership; filename token must not leak.
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/VFX/Particles/Characters/1036/MVP/1036300/NS_1034300_CameraParticle_01.uasset",
+            &known(),
+        );
+        let chars: Vec<u32> = hits.iter().map(|(c, _)| *c).collect();
+        assert!(chars.contains(&1036));
+        assert!(!chars.contains(&1034));
     }
 
     #[test]
     fn rejects_environment_paths() {
         let hits = detect_in_path(
             "Marvel/Content/Marvel/Environment/IPAsset/Characters/1026/1026300/Mesh.uasset",
+            &known(),
         );
         assert!(hits.is_empty());
     }
 
     #[test]
     fn handles_backslash_separators() {
-        let hits = detect_in_path("Marvel\\Content\\Marvel\\Characters\\1011\\1011502\\foo.uasset");
+        let hits = detect_in_path(
+            "Marvel\\Content\\Marvel\\Characters\\1011\\1011502\\foo.uasset",
+            &known(),
+        );
         assert!(hits.contains(&(1011, Some(1_011_502))));
     }
 
@@ -606,5 +706,144 @@ mod tests {
         // 2103312 derives char 2103, not a real hero. Must not surface as a match.
         let paths = vec!["Marvel/Content/Marvel/Some/Asset/2103312_thing.uasset".to_string()];
         assert!(detect_heroes_from_paths(paths).is_empty());
+    }
+
+    #[test]
+    fn matches_square_hero_head_anchor() {
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/HeroPortrait/SquareHeroHead/img_squarehead_10110010_avatar.uasset",
+            &known(),
+        );
+        assert!(hits.contains(&(1011, None)));
+    }
+
+    #[test]
+    fn matches_square_hero_head_proficiency() {
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/HeroPortrait/SquareHeroHead/Proficiency/img_squarehead_21047020_avatar.uasset",
+            &known(),
+        );
+        assert!(hits.contains(&(1047, None)));
+    }
+
+    #[test]
+    fn square_head_aggregates_with_catalogue_filter() {
+        let paths = vec![
+            "Marvel/Content/Marvel/UI/Textures/HeroPortrait/SquareHeroHead/img_squarehead_10110010_avatar.uasset".to_string(),
+            "Marvel/Content/Marvel/UI/Textures/HeroPortrait/SquareHeroHead/Proficiency/img_squarehead_21065020_avatar.uasset".to_string(),
+        ];
+        let matches = detect_heroes_from_paths(paths);
+        let ids: Vec<u32> = matches.iter().map(|m| m.character_id).collect();
+        assert!(ids.contains(&1011));
+        assert!(ids.contains(&1065));
+    }
+
+    #[test]
+    fn matches_ui_textures_charid_folder_segment() {
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/Ability/1055/icon_105501.uasset",
+            &known(),
+        );
+        assert!(hits.contains(&(1055, None)));
+    }
+
+    #[test]
+    fn matches_ui_textures_short_filename_token() {
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/HeroLogo/img_herologo_1055_logo.uasset",
+            &known(),
+        );
+        assert!(hits.contains(&(1055, None)));
+    }
+
+    #[test]
+    fn matches_ui_textures_8digit_with_item_prefix() {
+        // 31055001 = item-type 3 + char 1055 + variant 001, char at pos 1.
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/Show/Nameplate/img_nameplate_31055001.uasset",
+            &known(),
+        );
+        assert!(hits.contains(&(1055, None)));
+    }
+
+    #[test]
+    fn matches_ui_textures_pendant_with_3digit_prefix() {
+        // 03810550001: char 1055 at window position 3.
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/Item/Pendant/item_pandant_03810550001.uasset",
+            &known(),
+        );
+        assert!(hits.contains(&(1055, None)));
+    }
+
+    #[test]
+    fn matches_ui_textures_mall_multi_id() {
+        // 10515040and10558000 splits into two digit runs; both decode to chars.
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/Mall/SkinCard/img_mall_10515040and10558000_skin.uasset",
+            &known(),
+        );
+        let ids: Vec<u32> = hits.iter().map(|(c, _)| *c).collect();
+        assert!(ids.contains(&1051));
+        assert!(ids.contains(&1055));
+    }
+
+    #[test]
+    fn ui_segment_anchor_suppresses_filename_window() {
+        // Mastery filename 21055022 references char 1055 (mastery target), but the
+        // 1011/ folder pins ownership to Bruce Banner. Window scan must be skipped.
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/Mastery/Reduce/1011/fb_mastery21055022_bg_03.uasset",
+            &known(),
+        );
+        let ids: Vec<u32> = hits.iter().map(|(c, _)| *c).collect();
+        assert!(ids.contains(&1011));
+        assert!(!ids.contains(&1055));
+    }
+
+    #[test]
+    fn ui_window_scan_takes_first_catalogue_match_per_token() {
+        // 1055103205 contains char 1055 at pos 0 and char 1032 at pos 4. Only the
+        // first (1055) should hit; 1032 is incidental substring overlap.
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/Item/Emote/item_emote_1055103205.uasset",
+            &known(),
+        );
+        let ids: Vec<u32> = hits.iter().map(|(c, _)| *c).collect();
+        assert!(ids.contains(&1055));
+        assert!(!ids.contains(&1032));
+    }
+
+    #[test]
+    fn ui_window_scan_skipped_outside_ui_textures() {
+        // Without /ui/textures/ anchor, the broad window scan must not run, so
+        // 2103312 (which contains substring `1033`) stays a no-match.
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/Some/Asset/2103312_thing.uasset",
+            &known(),
+        );
+        assert!(hits.iter().all(|(c, _)| *c != 1033));
+    }
+
+    #[test]
+    fn ui_career_path_suppressed() {
+        // 1011001 is Hulk's default skin id, but Career achievement badges aren't
+        // hero-attributed; the copper tier id collides incidentally.
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/Career/Career_Achievement/Career_Achvement_Badge/img_hero_copper_1011001.uasset",
+            &known(),
+        );
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn ui_depot_path_suppressed() {
+        // 2001011 contains substring `1011` at window pos 3; Depot themes aren't
+        // hero-attributed.
+        let hits = detect_in_path(
+            "Marvel/Content/Marvel/UI/Textures/Depot/MCNTheme/icon_mcntheme_2001011.uasset",
+            &known(),
+        );
+        assert!(hits.is_empty());
     }
 }
