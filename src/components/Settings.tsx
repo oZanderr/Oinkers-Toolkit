@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Shield,
   ShieldOff,
   Trash2,
   Undo2,
@@ -127,6 +128,7 @@ export function Settings({
     type: "ok" | "err";
   } | null>(null);
   const bypassNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [bypassInstalled, setBypassInstalled] = useState<boolean | null>(null);
 
   const [tweakProfiles, setTweakProfiles] = useState<TweakProfile[]>([]);
   const [profileNotice, setProfileNotice] = useState<{
@@ -180,6 +182,39 @@ export function Settings({
   }, [draftGamePath]);
 
   useEffect(() => {
+    if (!draftGamePath) {
+      setBypassInstalled(null);
+      return;
+    }
+    let cancelled = false;
+    invoke<boolean>("is_signature_bypass_installed", { gameRoot: draftGamePath })
+      .then((v) => {
+        if (!cancelled) setBypassInstalled(v);
+      })
+      .catch(() => {
+        if (!cancelled) setBypassInstalled(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draftGamePath]);
+
+  async function refreshBypassStatus() {
+    if (!draftGamePath) {
+      setBypassInstalled(null);
+      return;
+    }
+    try {
+      const v = await invoke<boolean>("is_signature_bypass_installed", {
+        gameRoot: draftGamePath,
+      });
+      setBypassInstalled(v);
+    } catch {
+      setBypassInstalled(null);
+    }
+  }
+
+  useEffect(() => {
     invoke<boolean>("get_auto_check_updates")
       .then((v) => {
         setDraftAutoCheck(v);
@@ -226,8 +261,8 @@ export function Settings({
       })
       .catch((e) => {
         console.error(e);
-        setDraftShowHeroIcons(true);
-        setSavedShowHeroIcons(true);
+        setDraftShowHeroIcons(false);
+        setSavedShowHeroIcons(false);
       });
   }, []);
 
@@ -376,9 +411,32 @@ export function Settings({
         gameRoot: draftGamePath,
       });
       setBypassNotice({ msg, type: "ok" });
+      emitModsChanged({
+        modsFolder: `${draftGamePath}\\MarvelGame\\Marvel\\Content\\Paks\\~mods`,
+        source: "Settings",
+      });
     } catch (e: unknown) {
       setBypassNotice({ msg: String(e), type: "err" });
     }
+    await refreshBypassStatus();
+    bypassNoticeTimer.current = setTimeout(() => setBypassNotice(null), 6000);
+  }
+
+  async function installBypass() {
+    if (bypassNoticeTimer.current) clearTimeout(bypassNoticeTimer.current);
+    try {
+      const msg = await invoke<string>("install_signature_bypass", {
+        gameRoot: draftGamePath,
+      });
+      setBypassNotice({ msg, type: "ok" });
+      emitModsChanged({
+        modsFolder: `${draftGamePath}\\MarvelGame\\Marvel\\Content\\Paks\\~mods`,
+        source: "Settings",
+      });
+    } catch (e: unknown) {
+      setBypassNotice({ msg: String(e), type: "err" });
+    }
+    await refreshBypassStatus();
     bypassNoticeTimer.current = setTimeout(() => setBypassNotice(null), 6000);
   }
 
@@ -829,35 +887,51 @@ export function Settings({
 
           {/* ── Signature Bypass ── */}
           <div className="flex flex-col overflow-hidden rounded-md border border-border">
-            <div className="border-b border-border bg-card px-3 py-2">
+            <div className="flex items-center gap-3 border-b border-border bg-card px-3 py-2">
               <h3 className="text-sm font-semibold">Signature Bypass</h3>
+              {bypassNotice && (
+                <span
+                  className={cn(
+                    "flex items-center gap-1.5 text-[11px] font-medium",
+                    bypassNotice.type === "ok" ? "text-ok" : "text-err"
+                  )}
+                >
+                  {bypassNotice.type === "ok" ? (
+                    <CheckCircle2 size={13} strokeWidth={2.5} />
+                  ) : (
+                    <XCircle size={13} strokeWidth={2.5} />
+                  )}
+                  {bypassNotice.msg}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
               <div className="flex flex-1 flex-col gap-0.5">
-                <span className="text-[13px] font-medium">Remove bypass files</span>
-                <span className="text-[11px] text-muted-foreground">
-                  Removes dsound.dll and the bypass plugin from the game directory.
+                <span className="text-[13px] font-medium">
+                  {bypassInstalled ? "Remove bypass files" : "Install bypass files"}
                 </span>
-                {bypassNotice && (
-                  <span
-                    className={cn(
-                      "mt-0.5 flex items-center gap-1.5 text-[11px] font-medium",
-                      bypassNotice.type === "ok" ? "text-ok" : "text-err"
-                    )}
-                  >
-                    {bypassNotice.type === "ok" ? (
-                      <CheckCircle2 size={13} strokeWidth={2.5} />
-                    ) : (
-                      <XCircle size={13} strokeWidth={2.5} />
-                    )}
-                    {bypassNotice.msg}
-                  </span>
-                )}
+                <span className="text-[11px] text-muted-foreground">
+                  {bypassInstalled
+                    ? "Removes dsound.dll and the bypass plugin from the game directory."
+                    : "Installs dsound.dll and the bypass plugin into the game directory."}
+                </span>
               </div>
-              <Button variant="red" size="sm" onClick={removeBypass} disabled={!draftGamePath}>
-                <ShieldOff size={13} />
-                Remove
-              </Button>
+              {bypassInstalled ? (
+                <Button variant="red" size="sm" onClick={removeBypass} disabled={!draftGamePath}>
+                  <ShieldOff size={13} />
+                  Remove
+                </Button>
+              ) : (
+                <Button
+                  variant="green"
+                  size="sm"
+                  onClick={installBypass}
+                  disabled={!draftGamePath || bypassInstalled === null}
+                >
+                  <Shield size={13} />
+                  Install
+                </Button>
+              )}
             </div>
           </div>
 

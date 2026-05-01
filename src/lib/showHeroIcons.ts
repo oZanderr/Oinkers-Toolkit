@@ -11,7 +11,7 @@ export async function setShowHeroIcons(enabled: boolean): Promise<void> {
 }
 
 export function useShowHeroIcons(): boolean {
-  const [value, setValue] = useState<boolean>(true);
+  const [value, setValue] = useState<boolean>(false);
 
   useEffect(() => {
     let cancelled = false;

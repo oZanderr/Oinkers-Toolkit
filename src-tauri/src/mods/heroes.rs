@@ -14,8 +14,8 @@ use tauri::{AppHandle, Manager};
 use crate::concurrency;
 use crate::pak;
 use crate::paths;
-use crate::settings::{ModHeroCacheEntry, Settings, SettingsState};
 
+use super::hero_cache::{HeroCache, HeroCacheState, ModHeroCacheEntry};
 use super::status::{ModEntry, ModsStatus};
 
 const RAW_CATALOGUE: &str = include_str!("../../data/character_ids.json");
@@ -408,7 +408,7 @@ pub(crate) fn detect_heroes_for_mod(
 /// Populate `status.mod_entries[*].heroes` using the cache, recomputing for any
 /// mod whose cached size doesn't match the current size (or that's missing from
 /// the cache). Persists the cache when changes occur.
-pub(crate) fn enrich_status_with_heroes(state: &Mutex<Settings>, status: &mut ModsStatus) {
+pub(crate) fn enrich_status_with_heroes(cache: &Mutex<HeroCache>, status: &mut ModsStatus) {
     if status.mod_entries.is_empty() {
         return;
     }
@@ -418,14 +418,14 @@ pub(crate) fn enrich_status_with_heroes(state: &Mutex<Settings>, status: &mut Mo
     // Snapshot sync timestamp so we can detect a sync that races with our pak I/O
     // and so cache hits re-detect when the catalogue has moved on.
     let (needs_compute, sync_stamp_at_start): (Vec<(usize, String, String, u64)>, u64) = {
-        let Ok(guard) = state.lock() else {
-            eprintln!("rivals-toolkit: settings lock poisoned, skipping hero enrichment");
+        let Ok(guard) = cache.lock() else {
+            eprintln!("rivals-toolkit: hero cache lock poisoned, skipping hero enrichment");
             return;
         };
         let current_stamp = guard.last_character_data_sync;
         let mut work = Vec::new();
         for (idx, entry) in status.mod_entries.iter_mut().enumerate() {
-            if let Some(cached) = guard.mod_hero_cache.get(&entry.display_name)
+            if let Some(cached) = guard.entries.get(&entry.display_name)
                 && cached.size_bytes == entry.size_bytes
                 && cached.catalogue_stamp == current_stamp
             {
@@ -443,7 +443,7 @@ pub(crate) fn enrich_status_with_heroes(state: &Mutex<Settings>, status: &mut Mo
     };
 
     if needs_compute.is_empty() {
-        prune_cache(state, &status.mod_entries);
+        prune_cache(cache, &status.mod_entries);
         return;
     }
 
@@ -462,8 +462,8 @@ pub(crate) fn enrich_status_with_heroes(state: &Mutex<Settings>, status: &mut Mo
     });
 
     {
-        let Ok(mut guard) = state.lock() else {
-            eprintln!("rivals-toolkit: settings lock poisoned during hero enrichment write");
+        let Ok(mut guard) = cache.lock() else {
+            eprintln!("rivals-toolkit: hero cache lock poisoned during hero enrichment write");
             return;
         };
         // If a sync committed between snapshot and now, our `computed` results were
@@ -478,7 +478,7 @@ pub(crate) fn enrich_status_with_heroes(state: &Mutex<Settings>, status: &mut Mo
                     if let Some(entry) = status.mod_entries.get_mut(idx) {
                         entry.heroes.clone_from(&heroes);
                     }
-                    guard.mod_hero_cache.insert(
+                    guard.entries.insert(
                         display_name,
                         ModHeroCacheEntry {
                             size_bytes: size,
@@ -499,25 +499,21 @@ pub(crate) fn enrich_status_with_heroes(state: &Mutex<Settings>, status: &mut Mo
             .iter()
             .map(|e| e.display_name.as_str())
             .collect();
-        guard
-            .mod_hero_cache
-            .retain(|k, _| live.contains(k.as_str()));
+        guard.entries.retain(|k, _| live.contains(k.as_str()));
         if let Err(e) = guard.save() {
             eprintln!("rivals-toolkit: failed to persist mod hero cache: {e}");
         }
     }
 }
 
-fn prune_cache(state: &Mutex<Settings>, entries: &[ModEntry]) {
-    let Ok(mut guard) = state.lock() else {
+fn prune_cache(cache: &Mutex<HeroCache>, entries: &[ModEntry]) {
+    let Ok(mut guard) = cache.lock() else {
         return;
     };
     let live: HashSet<&str> = entries.iter().map(|e| e.display_name.as_str()).collect();
-    let before = guard.mod_hero_cache.len();
-    guard
-        .mod_hero_cache
-        .retain(|k, _| live.contains(k.as_str()));
-    if guard.mod_hero_cache.len() != before
+    let before = guard.entries.len();
+    guard.entries.retain(|k, _| live.contains(k.as_str()));
+    if guard.entries.len() != before
         && let Err(e) = guard.save()
     {
         eprintln!("rivals-toolkit: failed to persist pruned hero cache: {e}");
@@ -528,7 +524,7 @@ fn prune_cache(state: &Mutex<Settings>, entries: &[ModEntry]) {
 /// Derives the total on-disk size (pak + companions) at scan time via the
 /// shared helper so the cached entry matches what status enrichment computes.
 pub(crate) fn rescan_heroes_for_mod(
-    state: &Mutex<Settings>,
+    cache: &Mutex<HeroCache>,
     mods_folder: &Path,
     full_name: &str,
     display_name: &str,
@@ -543,9 +539,9 @@ pub(crate) fn rescan_heroes_for_mod(
 
     match detect_heroes_for_mod(mods_folder, full_name)? {
         DetectionOutcome::Heroes(heroes) => {
-            if let Ok(mut guard) = state.lock() {
+            if let Ok(mut guard) = cache.lock() {
                 let catalogue_stamp = guard.last_character_data_sync;
-                guard.mod_hero_cache.insert(
+                guard.entries.insert(
                     display_name.to_string(),
                     ModHeroCacheEntry {
                         size_bytes,
@@ -562,8 +558,8 @@ pub(crate) fn rescan_heroes_for_mod(
         DetectionOutcome::Failed => {
             // Drop any stale cached entry so the next scan retries instead of
             // serving the bad data.
-            if let Ok(mut guard) = state.lock() {
-                guard.mod_hero_cache.remove(display_name);
+            if let Ok(mut guard) = cache.lock() {
+                guard.entries.remove(display_name);
                 if let Err(e) = guard.save() {
                     eprintln!(
                         "rivals-toolkit: failed to persist cleared cache after failed rescan: {e}"
@@ -590,9 +586,9 @@ pub(crate) async fn rescan_mod_heroes(
     display_name: String,
 ) -> Result<Vec<HeroMatch>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<SettingsState>();
+        let cache = app.state::<HeroCacheState>();
         let mods_folder = paths::mods_dir(&game_root);
-        rescan_heroes_for_mod(&state, &mods_folder, &full_name, &display_name)
+        rescan_heroes_for_mod(&cache, &mods_folder, &full_name, &display_name)
     })
     .await
     .map_err(|e| e.to_string())?

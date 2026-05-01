@@ -12,6 +12,7 @@ use tauri::State;
 
 use crate::settings::SettingsState;
 
+use super::hero_cache::HeroCacheState;
 use super::heroes::{RawCatalogue, catalogue_data, reload_catalogue, user_catalogue_path};
 
 const CHARACTER_SYNC_INTERVAL_SECS: u64 = 24 * 60 * 60;
@@ -162,13 +163,13 @@ pub(crate) fn get_character_data_info() -> CharacterDataInfo {
 
 #[tauri::command]
 pub(crate) async fn sync_character_data(
-    state: State<'_, SettingsState>,
+    cache: State<'_, HeroCacheState>,
 ) -> Result<SyncResult, String> {
     let result = tauri::async_runtime::spawn_blocking(sync_from_remote)
         .await
         .map_err(|e| e.to_string())??;
 
-    if let Ok(mut guard) = state.lock() {
+    if let Ok(mut guard) = cache.lock() {
         guard.last_character_data_sync = result.fetched_at;
         if let Err(e) = guard.save() {
             eprintln!("rivals-toolkit: failed to persist updated catalogue stamp: {e}");
@@ -179,18 +180,26 @@ pub(crate) async fn sync_character_data(
 }
 
 #[tauri::command]
-pub(crate) fn should_auto_sync_character_data(state: State<'_, SettingsState>) -> bool {
-    let Ok(guard) = state.lock() else {
+pub(crate) fn should_auto_sync_character_data(
+    state: State<'_, SettingsState>,
+    cache: State<'_, HeroCacheState>,
+) -> bool {
+    let Ok(settings_guard) = state.lock() else {
         return false;
     };
-    if !guard.auto_sync_character_data {
+    if !settings_guard.auto_sync_character_data {
         return false;
     }
+    drop(settings_guard);
+    let last_sync = cache
+        .lock()
+        .map(|c| c.last_character_data_sync)
+        .unwrap_or(0);
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    now.saturating_sub(guard.last_character_data_sync) >= CHARACTER_SYNC_INTERVAL_SECS
+    now.saturating_sub(last_sync) >= CHARACTER_SYNC_INTERVAL_SECS
 }
 
 #[tauri::command]

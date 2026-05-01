@@ -5,6 +5,7 @@ pub(crate) mod character_sync;
 pub(crate) mod commands;
 pub(crate) mod conflicts;
 mod folder;
+pub(crate) mod hero_cache;
 pub(crate) mod heroes;
 pub(crate) mod profiles;
 mod status;
@@ -89,6 +90,10 @@ pub(crate) fn install_signature_bypass(game_root: &str) -> Result<String, String
 
 pub(crate) fn remove_signature_bypass(game_root: &str) -> Result<String, String> {
     bypass::remove_signature_bypass(game_root)
+}
+
+pub(crate) fn is_signature_bypass_installed(game_root: &str) -> bool {
+    bypass::is_signature_bypass_installed(game_root)
 }
 
 pub(crate) fn open_mods_folder(game_root: &str) -> Result<(), String> {

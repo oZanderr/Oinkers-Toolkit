@@ -39,6 +39,21 @@ pub(crate) struct ConflictReport {
     pub mods_scanned: usize,
 }
 
+/// UE maps any `<ProjectName>/Content/...` to `/Game/...` at runtime, so paks cooked
+/// from different project names overlay the same virtual asset. Strip the project
+/// prefix so cross-project conflicts collide in the same map bucket.
+fn canonical_asset_key(path: &str) -> String {
+    let lower = path.replace('\\', "/").to_lowercase();
+    let trimmed = lower.trim_start_matches('/');
+    if let Some(idx) = trimmed.find("/content/") {
+        let prefix = &trimmed[..idx];
+        if !prefix.is_empty() && !prefix.contains('/') {
+            return trimmed[idx + "/content/".len()..].to_string();
+        }
+    }
+    lower
+}
+
 /// Check all enabled mods for asset-level conflicts (same file path in multiple paks).
 pub(crate) fn check_conflicts(game_root: &str, recursive: bool) -> Result<ConflictReport, String> {
     let mods_folder = mods_dir(game_root);
@@ -86,15 +101,12 @@ pub(crate) fn check_conflicts(game_root: &str, recursive: bool) -> Result<Confli
         };
 
         for asset in assets {
-            let lower = asset.to_lowercase();
-            // Skip patched_files entries — these are metadata, not real asset conflicts.
-            if lower.contains("patched_files") {
+            let key = canonical_asset_key(&asset);
+            // Skip patched_files entries, these are metadata not real asset conflicts.
+            if key.contains("patched_files") {
                 continue;
             }
-            asset_to_mods
-                .entry(lower)
-                .or_default()
-                .push(display.clone());
+            asset_to_mods.entry(key).or_default().push(display.clone());
         }
     }
 
@@ -157,4 +169,43 @@ pub(crate) fn check_conflicts(game_root: &str, recursive: bool) -> Result<Confli
         asset_conflicts,
         mods_scanned,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_asset_key;
+
+    #[test]
+    fn cross_project_paths_collide() {
+        let marvel =
+            canonical_asset_key("Marvel/Content/Marvel/Characters/1054/1054001/Mesh.uasset");
+        let season6 =
+            canonical_asset_key("Season6/Content/Marvel/Characters/1054/1054001/Mesh.uasset");
+        assert_eq!(marvel, season6);
+        assert_eq!(marvel, "marvel/characters/1054/1054001/mesh.uasset");
+    }
+
+    #[test]
+    fn handles_backslash_paths() {
+        let key = canonical_asset_key("Marvel\\Content\\Marvel\\Characters\\1054\\Mesh.uasset");
+        assert_eq!(key, "marvel/characters/1054/mesh.uasset");
+    }
+
+    #[test]
+    fn handles_leading_slash() {
+        let key = canonical_asset_key("/Marvel/Content/Foo/Bar.uasset");
+        assert_eq!(key, "foo/bar.uasset");
+    }
+
+    #[test]
+    fn no_content_segment_falls_back_to_lowercase() {
+        let key = canonical_asset_key("SomeOther/Path/File.uasset");
+        assert_eq!(key, "someother/path/file.uasset");
+    }
+
+    #[test]
+    fn nested_content_only_strips_top_project() {
+        let key = canonical_asset_key("Marvel/Content/Plugins/Foo/Content/Bar.uasset");
+        assert_eq!(key, "plugins/foo/content/bar.uasset");
+    }
 }

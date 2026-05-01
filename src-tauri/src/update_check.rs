@@ -1,6 +1,8 @@
 //! GitHub release polling with a short cache, used by the auto-update prompt on app launch.
 
+use std::io::Read;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +14,11 @@ const GITHUB_OWNER: &str = "oZanderr";
 const GITHUB_REPO: &str = "Rivals-Toolkit";
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 60); // 30 minutes
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Hard cap so a hostile/broken host can't OOM the app. Real GitHub release JSON is well under.
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// Serializes concurrent update checks (auto-check on launch + manual button click).
+static FETCH_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct UpdateInfo {
@@ -59,15 +66,35 @@ fn read_cache() -> Option<UpdateInfo> {
 }
 
 fn write_cache(info: &UpdateInfo) {
-    let Some(path) = cache_path() else { return };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let Some(path) = cache_path() else {
+        eprintln!("rivals-toolkit: no cache dir for update cache");
+        return;
+    };
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("rivals-toolkit: failed to create update cache dir: {e}");
+        return;
     }
     let cached = CachedCheck {
         timestamp: now_secs(),
         info: info.clone(),
     };
-    let _ = serde_json::to_string(&cached).map(|json| std::fs::write(path, json));
+    let json = match serde_json::to_string_pretty(&cached) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("rivals-toolkit: failed to serialize update cache: {e}");
+            return;
+        }
+    };
+    let tmp = path.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp, json) {
+        eprintln!("rivals-toolkit: failed to write update cache tmp: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        eprintln!("rivals-toolkit: failed to commit update cache: {e}");
+    }
 }
 
 fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
@@ -95,6 +122,18 @@ fn fetch_update_info(current_version: &str, force: bool) -> Result<UpdateInfo, S
         return Ok(cached);
     }
 
+    // Serialize with concurrent callers; second caller will see fresh cache after first finishes.
+    let _guard = FETCH_LOCK
+        .try_lock()
+        .map_err(|_| "Update check already in progress".to_string())?;
+
+    // Double-check cache after acquiring lock to avoid duplicate fetch.
+    if !force && let Some(mut cached) = read_cache() {
+        cached.current_version = current_version.to_string();
+        cached.update_available = is_newer(&cached.latest_version, current_version);
+        return Ok(cached);
+    }
+
     let url = format!("https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest");
 
     let agent = ureq::Agent::config_builder()
@@ -102,15 +141,32 @@ fn fetch_update_info(current_version: &str, force: bool) -> Result<UpdateInfo, S
         .build()
         .new_agent();
 
-    let response: GitHubRelease = agent
+    let mut http_response = agent
         .get(&url)
         .header("User-Agent", "rivals-toolkit-update-check")
         .header("Accept", "application/vnd.github.v3+json")
         .call()
-        .map_err(|e| format!("Update check failed: {e}"))?
+        .map_err(|e| format!("Update check failed: {e}"))?;
+
+    let cap = u64::try_from(MAX_BODY_BYTES)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let mut body = String::new();
+    http_response
         .body_mut()
-        .read_json()
-        .map_err(|e| format!("Failed to parse response: {e}"))?;
+        .as_reader()
+        .take(cap)
+        .read_to_string(&mut body)
+        .map_err(|e| format!("Failed to read response: {e}"))?;
+
+    if body.len() > MAX_BODY_BYTES {
+        return Err(format!(
+            "Update check rejected: payload exceeds {MAX_BODY_BYTES} byte limit"
+        ));
+    }
+
+    let response: GitHubRelease =
+        serde_json::from_str(&body).map_err(|e| format!("Failed to parse response: {e}"))?;
 
     if response.prerelease {
         let info = UpdateInfo {

@@ -594,7 +594,7 @@ export function ScalabilityTweaks({
               <>
                 {selectedPreset && (
                   <>
-                    <Tip content="Save current tweaks into this preset (preserves pak-only entries)">
+                    <Tip content="Save current tweaks into this preset">
                       <Button variant="ghost" size="icon-sm" onClick={overwriteSelectedPreset}>
                         <Save size={13} />
                       </Button>

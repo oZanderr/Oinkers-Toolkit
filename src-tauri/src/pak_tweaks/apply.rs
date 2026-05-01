@@ -29,7 +29,7 @@ pub(crate) fn apply_pak_tweaks(pak_path: &str, edits: &[PakTweakEdit]) -> Result
         Ok(())
     })?;
 
-    let label = if edit_count == 1 { "edit" } else { "edits" };
+    let label = if edit_count == 1 { "change" } else { "changes" };
     Ok(format!("Applied {edit_count} {label} to {pak_name}"))
 }
 

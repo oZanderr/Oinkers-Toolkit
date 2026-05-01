@@ -24,6 +24,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage::<settings::SettingsState>(std::sync::Mutex::new(settings::Settings::load()))
+        .manage::<mods::hero_cache::HeroCacheState>(std::sync::Mutex::new(
+            mods::hero_cache::HeroCache::load(),
+        ))
         .invoke_handler(tauri::generate_handler![
             // detect
             detect::detect_install_path,
@@ -99,6 +102,7 @@ pub fn run() {
             mods::commands::check_mod_conflicts,
             mods::commands::install_signature_bypass,
             mods::commands::remove_signature_bypass,
+            mods::commands::is_signature_bypass_installed,
             mods::commands::open_mods_folder,
             mods::commands::toggle_mod_enabled,
             mods::commands::toggle_mods_enabled,

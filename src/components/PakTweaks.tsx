@@ -146,6 +146,8 @@ interface Props {
   isActive?: boolean;
 }
 
+const ADVANCED_CATEGORIES = new Set(["Latency"]);
+
 export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
   const [paks, setPaks] = useState<PakIniInfo[]>([]);
   const [selectedPak, setSelectedPak] = useState<PakIniInfo | null>(null);
@@ -259,7 +261,7 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
       pakCache.current.delete(e.pakPath);
       if (selectedPak?.pak_path !== e.pakPath) return;
       if (edits.length > 0) {
-        showNotice("Pak changed elsewhere; reload manually to discard edits", "info", 6000);
+        showNotice("Pak changed elsewhere; reload manually to discard changes", "info", 6000);
         return;
       }
       forceReloadPak(selectedPak);
@@ -1079,6 +1081,15 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                       <div className="border-b border-border bg-card px-3 py-2">
                         <span className="text-sm font-semibold">{category}</span>
                       </div>
+                      {ADVANCED_CATEGORIES.has(category) && (
+                        <div className="flex items-start gap-2 border-b border-border/50 bg-warn/10 px-3 py-2 text-[11px] text-muted-foreground">
+                          <TriangleAlert size={13} className="mt-px shrink-0 text-warn" />
+                          <span>
+                            Advanced tweaks. Defaults are tuned for most setups; only change these
+                            if you understand what they do.
+                          </span>
+                        </div>
+                      )}
                       <div className="flex flex-col divide-y divide-border/50">
                         {defs.map((tweak) => {
                           const engineOnly =

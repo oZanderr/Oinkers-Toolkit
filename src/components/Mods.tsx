@@ -190,6 +190,9 @@ export function Mods({
   const [profileBusy, setProfileBusy] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
+  const [lastAppliedProfile, setLastAppliedProfile] = useState<string | null>(null);
+  const [pendingDeleteProfile, setPendingDeleteProfile] = useState<string | null>(null);
+  const newProfileInputRef = useRef<HTMLInputElement>(null);
   const lastClickedIndex = useRef<number | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -681,6 +684,7 @@ export function Mods({
     try {
       await invoke<ModProfile>("save_mod_profile", { name: trimmed, gameRoot: gamePath });
       setNewProfileName("");
+      setLastAppliedProfile(trimmed);
       await refreshProfiles();
       showNotice(`Saved profile "${trimmed}"`, "ok", 4000);
     } catch (e: unknown) {
@@ -693,10 +697,13 @@ export function Mods({
   async function deleteProfile(name: string) {
     try {
       await invoke("delete_mod_profile", { name });
+      if (lastAppliedProfile === name) setLastAppliedProfile(null);
       await refreshProfiles();
       showNotice(`Deleted profile "${name}"`, "ok", 4000);
     } catch (e: unknown) {
       showNotice(String(e), "err");
+    } finally {
+      setPendingDeleteProfile(null);
     }
   }
 
@@ -704,6 +711,7 @@ export function Mods({
     if (!gamePath) return;
     try {
       await invoke<ModProfile>("overwrite_mod_profile", { name, gameRoot: gamePath });
+      setLastAppliedProfile(name);
       await refreshProfiles();
       showNotice(`Updated profile "${name}" with current mods`, "ok", 4000);
     } catch (e: unknown) {
@@ -713,6 +721,7 @@ export function Mods({
 
   async function applyProfile(name: string) {
     if (!gamePath || profileBusy) return;
+    setPendingDeleteProfile(null);
     setProfileBusy(true);
     setProfilesOpen(false);
     try {
@@ -720,6 +729,7 @@ export function Mods({
         name,
         gameRoot: gamePath,
       });
+      setLastAppliedProfile(name);
       await refresh(true);
       emitChange();
       if (res.successes === 0 && res.failed === 0) {
@@ -914,13 +924,17 @@ export function Mods({
     const currentEnabled = new Set(
       modsStatus.mod_entries.filter((e) => e.enabled).map((e) => e.display_name)
     );
-    return (
-      profiles.find((p) => {
-        if (p.enabled_mods.length !== currentEnabled.size) return false;
-        return p.enabled_mods.every((m) => currentEnabled.has(m));
-      })?.name ?? null
+    const matches = profiles.filter(
+      (p) =>
+        p.enabled_mods.length === currentEnabled.size &&
+        p.enabled_mods.every((m) => currentEnabled.has(m))
     );
-  }, [modsStatus, profiles]);
+    if (matches.length === 0) return null;
+    if (lastAppliedProfile) {
+      return matches.some((p) => p.name === lastAppliedProfile) ? lastAppliedProfile : null;
+    }
+    return matches[0].name;
+  }, [modsStatus, profiles, lastAppliedProfile]);
 
   const selectAllState: boolean | "indeterminate" =
     totalCount > 0 && selected.size === totalCount
@@ -1162,7 +1176,13 @@ export function Mods({
                     <Archive size={15} />
                   </Button>
                 </Tip>
-                <Popover open={profilesOpen} onOpenChange={setProfilesOpen}>
+                <Popover
+                  open={profilesOpen}
+                  onOpenChange={(open) => {
+                    setProfilesOpen(open);
+                    if (!open) setPendingDeleteProfile(null);
+                  }}
+                >
                   <Tip content="Mod profiles">
                     <PopoverTrigger asChild>
                       <Button variant="ghost" size="icon-sm" disabled={!gamePath}>
@@ -1170,7 +1190,17 @@ export function Mods({
                       </Button>
                     </PopoverTrigger>
                   </Tip>
-                  <PopoverContent align="end" className="w-64 p-0">
+                  <PopoverContent
+                    align="end"
+                    className="w-72 p-0"
+                    onOpenAutoFocus={(e) => {
+                      e.preventDefault();
+                      if (!newProfileName.trim()) {
+                        newProfileInputRef.current?.focus();
+                      }
+                    }}
+                    onCloseAutoFocus={(e) => e.preventDefault()}
+                  >
                     <div className="flex items-center justify-between border-b border-border px-3 py-2">
                       <span className="text-sm font-semibold">Profiles</span>
                     </div>
@@ -1182,35 +1212,99 @@ export function Mods({
                       <ul className="max-h-52 overflow-y-auto">
                         {profiles.map((p) => {
                           const isActive = activeProfileName === p.name;
+                          const isDrifted = !isActive && lastAppliedProfile === p.name;
                           return (
                             <ContextMenu key={p.name}>
                               <ContextMenuTrigger asChild>
                                 <li
                                   onClick={() => {
-                                    if (!isActive) applyProfile(p.name);
+                                    if (pendingDeleteProfile === p.name) return;
+                                    applyProfile(p.name);
                                   }}
                                   className={cn(
-                                    "flex items-center gap-2 border-b border-border/50 px-3 py-2 last:border-none transition-colors select-none",
-                                    isActive
-                                      ? "bg-primary/10"
-                                      : "cursor-pointer hover:bg-secondary/40"
+                                    "flex min-h-9 cursor-pointer items-center gap-1.5 border-b border-border/50 px-3 py-1.5 last:border-none transition-colors select-none",
+                                    isActive ? "bg-primary/10" : "hover:bg-secondary/40"
                                   )}
                                 >
-                                  <span className="w-4 shrink-0 flex items-center justify-center">
-                                    {isActive && <Check size={13} className="text-ok" />}
+                                  <span className="flex w-4 shrink-0 items-center justify-center">
+                                    {isActive ? (
+                                      <Check size={13} className="text-ok" />
+                                    ) : isDrifted ? (
+                                      <Tip content="Mods changed since this profile was applied">
+                                        <span
+                                          aria-label="Modified since applied"
+                                          className="size-1.5 rounded-full bg-warn"
+                                        />
+                                      </Tip>
+                                    ) : null}
                                   </span>
-                                  <span
-                                    className={cn(
-                                      "min-w-0 flex-1 truncate text-[13px]",
-                                      isActive && "font-semibold"
-                                    )}
-                                  >
-                                    {p.name}
-                                  </span>
-                                  <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-                                    {p.enabled_mods.length} mod
-                                    {p.enabled_mods.length !== 1 ? "s" : ""}
-                                  </span>
+                                  <Tip content={p.name}>
+                                    <span
+                                      className={cn(
+                                        "min-w-0 flex-1 truncate text-[13px]",
+                                        isActive && "font-semibold"
+                                      )}
+                                    >
+                                      {p.name}
+                                    </span>
+                                  </Tip>
+                                  {pendingDeleteProfile === p.name ? (
+                                    <div
+                                      className="ml-1 flex shrink-0 items-center gap-1"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <span className="text-[11px] font-medium text-err">
+                                        Delete?
+                                      </span>
+                                      <Tip content="Confirm delete">
+                                        <button
+                                          onClick={() => deleteProfile(p.name)}
+                                          className="rounded bg-err px-1.5 text-[11px] font-semibold leading-5 text-white transition-opacity hover:opacity-90"
+                                        >
+                                          Yes
+                                        </button>
+                                      </Tip>
+                                      <Tip content="Cancel">
+                                        <button
+                                          onClick={() => setPendingDeleteProfile(null)}
+                                          className="rounded border border-border px-1.5 text-[11px] font-semibold leading-5 text-muted-foreground transition-colors hover:bg-secondary"
+                                        >
+                                          No
+                                        </button>
+                                      </Tip>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                                        {p.enabled_mods.length} mod
+                                        {p.enabled_mods.length !== 1 ? "s" : ""}
+                                      </span>
+                                      <div className="ml-1 flex items-center gap-0.5">
+                                        <Tip content="Overwrite with current mods">
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              overwriteProfile(p.name);
+                                            }}
+                                            className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                                          >
+                                            <RotateCcw size={13} />
+                                          </button>
+                                        </Tip>
+                                        <Tip content="Delete profile">
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setPendingDeleteProfile(p.name);
+                                            }}
+                                            className="shrink-0 rounded p-1 text-err/70 transition-colors hover:bg-err/10 hover:text-err"
+                                          >
+                                            <Trash2 size={13} />
+                                          </button>
+                                        </Tip>
+                                      </div>
+                                    </>
+                                  )}
                                 </li>
                               </ContextMenuTrigger>
                               <ContextMenuContent>
@@ -1231,6 +1325,7 @@ export function Mods({
                     )}
                     <div className="flex items-center gap-1.5 border-t border-border px-3 py-2">
                       <input
+                        ref={newProfileInputRef}
                         value={newProfileName}
                         onChange={(e) => setNewProfileName(e.target.value)}
                         onKeyDown={(e) => {
@@ -1324,7 +1419,7 @@ export function Mods({
                           }
                         }}
                         className={cn(
-                          "relative flex h-12 cursor-default items-center gap-3 border-b border-border/50 px-3 last:border-none select-none",
+                          "relative flex h-12 cursor-default items-center gap-3 border-b border-border/50 px-3 last:border-transparent select-none",
                           isSelected ? "bg-primary/10 hover:bg-primary/15" : "hover:bg-secondary/40"
                         )}
                       >
@@ -1386,7 +1481,7 @@ export function Mods({
                             >
                               <span
                                 className={cn(
-                                  "flex shrink-0 items-center gap-1.5 rounded-full bg-primary/10 py-0.5 pr-2 text-[11px] font-medium text-foreground",
+                                  "flex shrink-0 items-center gap-1.5 rounded-full bg-secondary/80 py-0.5 pr-2 text-[12px] text-foreground",
                                   showHeroIcons ? "pl-0.5" : "pl-2"
                                 )}
                               >
@@ -1394,7 +1489,8 @@ export function Mods({
                                   <HeroIcon
                                     characterId={entry.heroes[0].character_id}
                                     name={entry.heroes[0].character_name}
-                                    size={18}
+                                    size={22}
+                                    tooltip=""
                                   />
                                 )}
                                 <span className="max-w-32 truncate">
@@ -1405,7 +1501,7 @@ export function Mods({
                           )}
                           {entry.heroes.length > 1 && !showHeroIcons && (
                             <Tip content={entry.heroes.map((h) => h.character_name).join(", ")}>
-                              <span className="flex shrink-0 items-center rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-foreground">
+                              <span className="flex shrink-0 items-center rounded-full bg-secondary/80 px-2 py-0.5 text-[12px] text-foreground">
                                 <span className="max-w-32 truncate">
                                   {entry.heroes[0].character_name}
                                 </span>
@@ -1416,21 +1512,22 @@ export function Mods({
                             </Tip>
                           )}
                           {entry.heroes.length > 1 && showHeroIcons && (
-                            <span className="flex shrink-0 items-center -space-x-1">
-                              {entry.heroes.slice(0, 4).map((h) => (
-                                <HeroIcon
-                                  key={h.character_id}
-                                  characterId={h.character_id}
-                                  name={h.character_name}
-                                  size={20}
-                                  tooltip={
-                                    h.skin_names.length > 0
-                                      ? `${h.character_name}: ${h.skin_names.join(", ")}`
-                                      : h.character_name
-                                  }
-                                  className="ring-2 ring-background"
-                                />
-                              ))}
+                            <span className="flex shrink-0 items-center gap-1 rounded-full bg-secondary/80 px-1.5 py-0.5">
+                              <span className="flex items-center gap-1">
+                                {entry.heroes.slice(0, 4).map((h) => (
+                                  <HeroIcon
+                                    key={h.character_id}
+                                    characterId={h.character_id}
+                                    name={h.character_name}
+                                    size={22}
+                                    tooltip={
+                                      h.skin_names.length > 0
+                                        ? `${h.character_name}: ${h.skin_names.join(", ")}`
+                                        : h.character_name
+                                    }
+                                  />
+                                ))}
+                              </span>
                               {entry.heroes.length > 4 && (
                                 <Tip
                                   content={entry.heroes
@@ -1438,7 +1535,7 @@ export function Mods({
                                     .map((h) => h.character_name)
                                     .join(", ")}
                                 >
-                                  <span className="ml-0.5 flex h-5 shrink-0 items-center justify-center rounded-full bg-secondary/80 px-1.5 text-[10px] font-semibold leading-none text-foreground ring-2 ring-background">
+                                  <span className="flex h-5.5 min-w-5.5 shrink-0 items-center justify-center rounded-full bg-secondary/40 px-1 text-[11px] font-semibold leading-none text-foreground ring-1 ring-border/50">
                                     +{entry.heroes.length - 4}
                                   </span>
                                 </Tip>

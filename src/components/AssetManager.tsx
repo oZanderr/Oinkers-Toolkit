@@ -1190,7 +1190,14 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                   side="bottom"
                   align="start"
                 >
-                  <h3 className="truncate text-sm font-semibold">{pakName ?? "Contents"}</h3>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <h3 className="truncate text-sm font-semibold">{pakName ?? "Contents"}</h3>
+                    {selectedPak && (
+                      <span className="shrink-0 rounded bg-ok/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
+                        {selectedIsIoStore ? "iostore" : "pak"}
+                      </span>
+                    )}
+                  </div>
                 </Tip>
                 <Tip
                   content={selectedPak || ""}
@@ -1430,21 +1437,11 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                           )}
                           {(() => {
                             const cat = categoriesByPath.get(entry.path) ?? "other";
-                            return (
-                              <Tip content={CATEGORY_LABEL[cat]} side="top" align="start">
-                                <span className={cn("shrink-0", CATEGORY_TEXT_COLOR[cat])}>
-                                  <Package size={12} />
-                                </span>
-                              </Tip>
-                            );
-                          })()}
-                          {showHeroIcons &&
-                            (() => {
-                              const ids = heroesByPath.get(entry.path);
-                              if (!ids || ids.length === 0) return null;
+                            const heroIds = showHeroIcons ? heroesByPath.get(entry.path) : null;
+                            if (heroIds && heroIds.length > 0) {
                               return (
                                 <span className="flex shrink-0 items-center -space-x-1">
-                                  {ids.slice(0, 2).map((id) => (
+                                  {heroIds.slice(0, 2).map((id) => (
                                     <HeroIcon
                                       key={id}
                                       characterId={id}
@@ -1455,13 +1452,16 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                                   ))}
                                 </span>
                               );
-                            })()}
+                            }
+                            return (
+                              <Tip content={CATEGORY_LABEL[cat]} side="top" align="start">
+                                <span className={cn("shrink-0", CATEGORY_TEXT_COLOR[cat])}>
+                                  <Package size={12} />
+                                </span>
+                              </Tip>
+                            );
+                          })()}
                           <span className="truncate font-mono text-[11px]">{entry.path}</span>
-                          {entry.source === "utoc" && (
-                            <span className="ml-auto shrink-0 rounded bg-ok/15 px-1 py-0.5 text-[8px] font-semibold uppercase leading-none text-ok">
-                              utoc
-                            </span>
-                          )}
                         </div>
                       </ContextMenuTrigger>
                       <ContextMenuContent>

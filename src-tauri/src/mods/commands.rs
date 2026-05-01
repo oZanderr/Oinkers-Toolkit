@@ -4,6 +4,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::game_status;
 use crate::mods;
+use crate::mods::hero_cache::HeroCacheState;
 use crate::mods::heroes::enrich_status_with_heroes;
 use crate::mods::{BulkOpResult, ConflictReport, InstallResult, ModsStatus};
 use crate::settings::{SettingsState, recursive_mod_scan};
@@ -15,9 +16,10 @@ pub(crate) async fn get_mods_status(
 ) -> Result<ModsStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<SettingsState>();
+        let cache = app.state::<HeroCacheState>();
         let recursive = recursive_mod_scan(&state);
         let mut status = mods::get_mods_status(&game_root, recursive);
-        enrich_status_with_heroes(&state, &mut status);
+        enrich_status_with_heroes(&cache, &mut status);
         status
     })
     .await
@@ -43,6 +45,11 @@ pub(crate) fn install_signature_bypass(game_root: String) -> Result<String, Stri
 #[tauri::command]
 pub(crate) fn remove_signature_bypass(game_root: String) -> Result<String, String> {
     mods::remove_signature_bypass(&game_root)
+}
+
+#[tauri::command]
+pub(crate) fn is_signature_bypass_installed(game_root: String) -> bool {
+    mods::is_signature_bypass_installed(&game_root)
 }
 
 #[tauri::command]

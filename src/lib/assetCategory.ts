@@ -69,8 +69,8 @@ export const CATEGORY_TEXT_COLOR: Record<AssetCategory, string> = {
   level: "text-rose-400",
   data_asset: "text-emerald-400",
   ability: "text-purple-400",
-  movie: "text-indigo-400",
-  config: "text-slate-400",
+  movie: "text-lime-400",
+  config: "text-indigo-400",
   other: "text-muted-foreground",
 };
 
@@ -88,8 +88,8 @@ export const CATEGORY_BG_COLOR: Record<AssetCategory, string> = {
   level: "bg-rose-400/15",
   data_asset: "bg-emerald-400/15",
   ability: "bg-purple-400/15",
-  movie: "bg-indigo-400/15",
-  config: "bg-slate-400/15",
+  movie: "bg-lime-400/15",
+  config: "bg-indigo-400/15",
   other: "bg-muted-foreground/15",
 };
 
