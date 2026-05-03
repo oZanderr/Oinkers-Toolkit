@@ -1,3 +1,5 @@
+//! Tweak catalogue types and the full list of supported scalability tweaks.
+
 use serde::{Deserialize, Serialize};
 
 /// One line pattern used by a `RemoveLines` tweak.
@@ -361,185 +363,6 @@ pub(crate) fn tweak_catalogue() -> Vec<TweakDefinition> {
                 remove_only: false,
             },
         },
-        //Experimental
-        TweakDefinition {
-            id: "black_skyboxes".into(),
-            label: "Black Skyboxes".into(),
-            category: "Experimental".into(),
-            description: "Sets r.ViewDistanceScale to an extremely low value, culling distant \
-                           world geometry and backgrounds. Can improve performance on low-end \
-                           hardware at the cost of environmental depth."
-                .into(),
-            pak_only: false,
-            kind: TweakKind::Toggle {
-                key: "r.ViewDistanceScale".into(),
-                on_value: "0.0000000000000000000000000000000001".into(),
-                off_value: None,
-                default_enabled: false,
-                scalability_section: Some("ViewDistanceQuality@0".into()),
-                engine_section: None,
-            },
-        },
-        TweakDefinition {
-            id: "force_default_material".into(),
-            label: "Force Default Material".into(),
-            category: "Experimental".into(),
-            description: "Replaces all character materials with the engine default, \
-                           stripping textures and skins. Can improve performance on very low-end \
-                           hardware at the cost of visual clarity."
-                .into(),
-            pak_only: true,
-            kind: TweakKind::Toggle {
-                key: "r.debug.ForceDefaultMtl".into(),
-                on_value: "1".into(),
-                off_value: None,
-                default_enabled: false,
-                scalability_section: None,
-                engine_section: None,
-            },
-        },
-        TweakDefinition {
-            id: "network_revert_update_65".into(),
-            label: "Revert Network Rates (Update 6.5+)".into(),
-            category: "Experimental".into(),
-            description: "Reverts update 6.5+ network rate changes that can cause \
-                           teleporting/desync on some setups. Applies all four values in Engine.ini.".into(),
-            pak_only: true,
-            kind: TweakKind::BatchToggle {
-                entries: vec![
-                    BatchToggleEntry {
-                        key: "MaxClientRate".into(),
-                        on_value: "300000".into(),
-                        off_value: Some("8000000".into()),
-                        scalability_section: None,
-                        engine_section: Some("/Script/OnlineSubsystemUtils.IpNetDriver".into()),
-                    },
-                    BatchToggleEntry {
-                        key: "MaxInternetClientRate".into(),
-                        on_value: "300000".into(),
-                        off_value: Some("8000000".into()),
-                        scalability_section: None,
-                        engine_section: Some("/Script/OnlineSubsystemUtils.IpNetDriver".into()),
-                    },
-                    BatchToggleEntry {
-                        key: "ConfiguredInternetSpeed".into(),
-                        on_value: "300000".into(),
-                        off_value: Some("10000000".into()),
-                        scalability_section: None,
-                        engine_section: Some("/Script/Engine.Player".into()),
-                    },
-                    BatchToggleEntry {
-                        key: "ConfiguredLanSpeed".into(),
-                        on_value: "300000".into(),
-                        off_value: Some("15000000".into()),
-                        scalability_section: None,
-                        engine_section: Some("/Script/Engine.Player".into()),
-                    },
-                ],
-                default_enabled: false,
-            },
-        },
-        // Latency
-        TweakDefinition {
-            id: "latency_reflex_mode".into(),
-            label: "NVIDIA Reflex Mode".into(),
-            category: "Latency".into(),
-            description: "Controls NVIDIA Reflex mode via Streamline. \
-                           0 = Off, 1 = On (Low Latency), 2 = On + Boost. \
-                           Mode 2 can have weird issues like massive \
-                           performance loss in certain areas of the firing range."
-                .into(),
-            pak_only: true,
-            kind: TweakKind::Slider {
-                key: "t.Streamline.Reflex.Mode".into(),
-                min: 0.0,
-                max: 2.0,
-                step: 1.0,
-                default_value: 0.0,
-                write_default_on_disable: false,
-                scalability_section: None,
-                engine_section: None,
-            },
-        },
-        TweakDefinition {
-            id: "latency_gt_sync_type".into(),
-            label: "Game Thread Sync Type".into(),
-            category: "Latency".into(),
-            description: "Controls how the game thread synchronises with the GPU pipeline, \
-                           affecting input latency. \
-                           0 = sync to render thread (highest latency); \
-                           1 = sync to RHI thread (game default, balanced); \
-                           2 = sync to GPU swap-chain flip (lowest latency, if compatible). \
-                           Toggle is active only when set away from the default."
-                .into(),
-            pak_only: true,
-            kind: TweakKind::Slider {
-                key: "r.GTSyncType".into(),
-                min: 0.0,
-                max: 2.0,
-                step: 1.0,
-                default_value: 1.0,
-                write_default_on_disable: true,
-                scalability_section: None,
-                engine_section: None,
-            },
-        },
-        TweakDefinition {
-            id: "latency_finish_current_frame".into(),
-            label: "Finish Current Frame".into(),
-            category: "Latency".into(),
-            description: "Forces the current frame to finish/present instead of buffering. \
-                           Can improve input latency, but usually reduces \
-                           overall performance."
-                .into(),
-            pak_only: true,
-            kind: TweakKind::Toggle {
-                key: "r.FinishCurrentFrame".into(),
-                on_value: "1".into(),
-                off_value: Some("0".into()),
-                default_enabled: false,
-                scalability_section: None,
-                engine_section: None,
-            },
-        },
-        TweakDefinition {
-            id: "latency_one_frame_thread_lag".into(),
-            label: "One-Frame Thread Lag".into(),
-            category: "Latency".into(),
-            description: "Controls whether the render thread lags one frame behind the game \
-                           thread. Disable this to reduce latency at a \
-                           cost of performance."
-                .into(),
-            pak_only: true,
-            kind: TweakKind::Toggle {
-                key: "r.OneFrameThreadLag".into(),
-                on_value: "1".into(),
-                off_value: Some("0".into()),
-                default_enabled: true,
-                scalability_section: None,
-                engine_section: None,
-            },
-        },
-        TweakDefinition {
-            id: "latency_sync_interval".into(),
-            label: "VSync Sync Interval".into(),
-            category: "Latency".into(),
-            description: "Controls present interval for VSync-capable RHIs: 0 = present \
-                           immediately (unlocked), 1 = every vblank, 2 = every 2 vblanks, \
-                           etc. Higher values generally increase latency and lower frame rate. Only effective with VSync on."
-                .into(),
-            pak_only: true,
-            kind: TweakKind::Slider {
-                key: "rhi.SyncInterval".into(),
-                min: 0.0,
-                max: 4.0,
-                step: 1.0,
-                default_value: 0.0,
-                write_default_on_disable: false,
-                scalability_section: None,
-                engine_section: None,
-            },
-        },
         // Display
         TweakDefinition {
             id: "application_scale".into(),
@@ -648,5 +471,502 @@ pub(crate) fn tweak_catalogue() -> Vec<TweakDefinition> {
                 engine_section: None,
             },
         },
+        // Latency
+        TweakDefinition {
+            id: "latency_reflex_mode".into(),
+            label: "NVIDIA Reflex Mode".into(),
+            category: "Latency".into(),
+            description: "Controls NVIDIA Reflex mode via Streamline. \
+                           0 = Off, 1 = On, 2 = On + Boost. \
+                           Mode 2 can have weird issues like massive \
+                           performance loss in certain areas of the firing range."
+                .into(),
+            pak_only: true,
+            kind: TweakKind::Slider {
+                key: "t.Streamline.Reflex.Mode".into(),
+                min: 0.0,
+                max: 2.0,
+                step: 1.0,
+                default_value: 0.0,
+                write_default_on_disable: false,
+                scalability_section: None,
+                engine_section: None,
+            },
+        },
+        TweakDefinition {
+            id: "latency_gt_sync_type".into(),
+            label: "Game Thread Sync Type".into(),
+            category: "Latency".into(),
+            description: "Controls how the game thread synchronises with the GPU pipeline, \
+                           affecting input latency. \
+                           0 = sync to render thread (highest latency); \
+                           1 = sync to RHI thread (game default, balanced); \
+                           2 = sync to GPU swap-chain flip (lowest latency, if compatible). \
+                           Toggle is active only when set away from the default."
+                .into(),
+            pak_only: true,
+            kind: TweakKind::Slider {
+                key: "r.GTSyncType".into(),
+                min: 0.0,
+                max: 2.0,
+                step: 1.0,
+                default_value: 1.0,
+                write_default_on_disable: true,
+                scalability_section: None,
+                engine_section: None,
+            },
+        },
+        TweakDefinition {
+            id: "latency_finish_current_frame".into(),
+            label: "Finish Current Frame".into(),
+            category: "Latency".into(),
+            description: "Forces the current frame to finish/present instead of buffering. \
+                           Can improve input latency, but usually reduces \
+                           overall performance."
+                .into(),
+            pak_only: true,
+            kind: TweakKind::Toggle {
+                key: "r.FinishCurrentFrame".into(),
+                on_value: "1".into(),
+                off_value: Some("0".into()),
+                default_enabled: false,
+                scalability_section: None,
+                engine_section: None,
+            },
+        },
+        TweakDefinition {
+            id: "latency_one_frame_thread_lag".into(),
+            label: "One-Frame Thread Lag".into(),
+            category: "Latency".into(),
+            description: "Controls whether the render thread lags one frame behind the game \
+                           thread. Disable this to reduce latency at a \
+                           cost of performance."
+                .into(),
+            pak_only: true,
+            kind: TweakKind::Toggle {
+                key: "r.OneFrameThreadLag".into(),
+                on_value: "1".into(),
+                off_value: Some("0".into()),
+                default_enabled: true,
+                scalability_section: None,
+                engine_section: None,
+            },
+        },
+        TweakDefinition {
+            id: "latency_sync_interval".into(),
+            label: "VSync Sync Interval".into(),
+            category: "Latency".into(),
+            description: "Controls present interval for VSync-capable RHIs: 0 = present \
+                           immediately, 1 = every vblank, 2 = every 2 vblanks, \
+                           etc. Higher values generally increase latency and lower frame rate. Only effective with VSync on."
+                .into(),
+            pak_only: true,
+            kind: TweakKind::Slider {
+                key: "rhi.SyncInterval".into(),
+                min: 0.0,
+                max: 4.0,
+                step: 1.0,
+                default_value: 0.0,
+                write_default_on_disable: false,
+                scalability_section: None,
+                engine_section: None,
+            },
+        },
+        TweakDefinition {
+            id: "latency_sync_allow_early_kick".into(),
+            label: "Sync Allow Early Kick".into(),
+            category: "Latency".into(),
+            description: "With VSync on, lets the game start the next frame a bit earlier so \
+                           input feels closer to VSync off. Only matters when VSync is enabled. \
+                           May cause minor stutter if your frame rate is unstable."
+                .into(),
+            pak_only: true,
+            kind: TweakKind::Toggle {
+                key: "rhi.SyncAllowEarlyKick".into(),
+                on_value: "1".into(),
+                off_value: None,
+                default_enabled: false,
+                scalability_section: None,
+                engine_section: None,
+            },
+        },
+        TweakDefinition {
+            id: "latency_sync_slack_ms".into(),
+            label: "Sync Slack (ms)".into(),
+            category: "Latency".into(),
+            description: "Extra wait time (in milliseconds) before a frame is considered late. \
+                           Lower values feel more responsive but can cause more stutter if your \
+                           frame rate is unstable. Only matters when VSync is on or you're using \
+                           G-Sync / FreeSync."
+                .into(),
+            pak_only: true,
+            kind: TweakKind::Slider {
+                key: "rhi.SyncSlackMS".into(),
+                min: 0.0,
+                max: 30.0,
+                step: 1.0,
+                default_value: 0.0,
+                write_default_on_disable: false,
+                scalability_section: None,
+                engine_section: None,
+            },
+        },
+        // Experimental
+        TweakDefinition {
+            id: "black_skyboxes".into(),
+            label: "Black Skyboxes".into(),
+            category: "Experimental".into(),
+            description: "Sets r.ViewDistanceScale to an extremely low value, culling distant \
+                           world geometry and backgrounds. Can improve performance on low-end \
+                           hardware at the cost of environmental depth."
+                .into(),
+            pak_only: false,
+            kind: TweakKind::Toggle {
+                key: "r.ViewDistanceScale".into(),
+                on_value: "0.0000000000000000000000000000000001".into(),
+                off_value: None,
+                default_enabled: false,
+                scalability_section: Some("ViewDistanceQuality@0".into()),
+                engine_section: None,
+            },
+        },
+        TweakDefinition {
+            id: "force_default_material".into(),
+            label: "Force Default Material".into(),
+            category: "Experimental".into(),
+            description: "Replaces all character materials with the engine default, \
+                           stripping textures and skins. Can improve performance on very low-end \
+                           hardware at the cost of visual clarity."
+                .into(),
+            pak_only: true,
+            kind: TweakKind::Toggle {
+                key: "r.debug.ForceDefaultMtl".into(),
+                on_value: "1".into(),
+                off_value: None,
+                default_enabled: false,
+                scalability_section: None,
+                engine_section: None,
+            },
+        },
+        TweakDefinition {
+            id: "network_revert_update_65".into(),
+            label: "Revert Network Rates (Update 6.5+)".into(),
+            category: "Experimental".into(),
+            description: "Reverts update 6.5+ network rate changes that can cause \
+                           teleporting/desync on some setups. Applies all four values in Engine.ini.".into(),
+            pak_only: true,
+            kind: TweakKind::BatchToggle {
+                entries: vec![
+                    BatchToggleEntry {
+                        key: "MaxClientRate".into(),
+                        on_value: "300000".into(),
+                        off_value: Some("8000000".into()),
+                        scalability_section: None,
+                        engine_section: Some("/Script/OnlineSubsystemUtils.IpNetDriver".into()),
+                    },
+                    BatchToggleEntry {
+                        key: "MaxInternetClientRate".into(),
+                        on_value: "300000".into(),
+                        off_value: Some("8000000".into()),
+                        scalability_section: None,
+                        engine_section: Some("/Script/OnlineSubsystemUtils.IpNetDriver".into()),
+                    },
+                    BatchToggleEntry {
+                        key: "ConfiguredInternetSpeed".into(),
+                        on_value: "300000".into(),
+                        off_value: Some("10000000".into()),
+                        scalability_section: None,
+                        engine_section: Some("/Script/Engine.Player".into()),
+                    },
+                    BatchToggleEntry {
+                        key: "ConfiguredLanSpeed".into(),
+                        on_value: "300000".into(),
+                        off_value: Some("15000000".into()),
+                        scalability_section: None,
+                        engine_section: Some("/Script/Engine.Player".into()),
+                    },
+                ],
+                default_enabled: false,
+            },
+        },
     ]
+}
+
+#[cfg(test)]
+mod validator_tests {
+    //! Catalogue invariants. Failing here means a malformed entry would ship —
+    //! detection or apply would silently break for that tweak in production.
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Extract `(key, value)` from a pattern like `r.X=0` or `+CVars=r.X=0`.
+    /// Returns `(key, Some(value))` or `(key, None)` when the pattern omits a value.
+    fn split_pattern(pattern: &str) -> (String, Option<String>) {
+        let inner = if pattern.to_ascii_lowercase().starts_with("+cvars=") {
+            &pattern["+CVars=".len()..]
+        } else {
+            pattern
+        };
+        match inner.split_once('=') {
+            Some((k, v)) => (k.trim().to_string(), Some(v.trim().to_string())),
+            None => (inner.trim().to_string(), None),
+        }
+    }
+
+    fn assert_id_basics(def: &TweakDefinition) {
+        assert!(
+            !def.id.trim().is_empty(),
+            "tweak id must not be empty/whitespace"
+        );
+        assert!(
+            !def.label.trim().is_empty(),
+            "{}: label must not be empty",
+            def.id
+        );
+        assert!(
+            !def.category.trim().is_empty(),
+            "{}: category must not be empty",
+            def.id
+        );
+    }
+
+    #[test]
+    fn ids_are_unique() {
+        let cat = tweak_catalogue();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for def in &cat {
+            assert!(
+                seen.insert(def.id.as_str()),
+                "duplicate tweak id: {}",
+                def.id
+            );
+        }
+    }
+
+    #[test]
+    fn all_have_non_empty_id_label_category() {
+        for def in &tweak_catalogue() {
+            assert_id_basics(def);
+        }
+    }
+
+    #[test]
+    fn remove_lines_invariants() {
+        for def in &tweak_catalogue() {
+            let TweakKind::RemoveLines { lines, .. } = &def.kind else {
+                continue;
+            };
+            assert!(
+                !lines.is_empty(),
+                "{}: RemoveLines.lines must not be empty",
+                def.id
+            );
+            for (i, line) in lines.iter().enumerate() {
+                let (key, _) = split_pattern(&line.pattern);
+                assert!(
+                    !key.is_empty(),
+                    "{}: line[{}] pattern has no key: {:?}",
+                    def.id,
+                    i,
+                    line.pattern
+                );
+                if let Some(rw) = &line.replace_with {
+                    let (rw_key, rw_val) = split_pattern(rw);
+                    assert!(
+                        !rw_key.is_empty(),
+                        "{}: line[{}] replace_with has no key: {:?}",
+                        def.id,
+                        i,
+                        rw
+                    );
+                    assert!(
+                        rw_val.is_some(),
+                        "{}: line[{}] replace_with must include a value: {:?}",
+                        def.id,
+                        i,
+                        rw
+                    );
+                    assert!(
+                        rw_key.eq_ignore_ascii_case(&key),
+                        "{}: line[{}] replace_with key {:?} does not match pattern key {:?}",
+                        def.id,
+                        i,
+                        rw_key,
+                        key
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn toggle_invariants() {
+        for def in &tweak_catalogue() {
+            let TweakKind::Toggle {
+                key,
+                on_value,
+                off_value,
+                ..
+            } = &def.kind
+            else {
+                continue;
+            };
+            assert!(
+                !key.trim().is_empty(),
+                "{}: Toggle.key must not be empty",
+                def.id
+            );
+            assert!(
+                !on_value.trim().is_empty(),
+                "{}: Toggle.on_value must not be empty",
+                def.id
+            );
+            if let Some(off) = off_value {
+                assert!(
+                    !off.trim().is_empty(),
+                    "{}: Toggle.off_value present but empty",
+                    def.id
+                );
+                assert_ne!(
+                    on_value, off,
+                    "{}: Toggle.on_value == off_value (no observable toggle)",
+                    def.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn slider_invariants() {
+        for def in &tweak_catalogue() {
+            let TweakKind::Slider {
+                key,
+                min,
+                max,
+                step,
+                default_value,
+                ..
+            } = &def.kind
+            else {
+                continue;
+            };
+            assert!(
+                !key.trim().is_empty(),
+                "{}: Slider.key must not be empty",
+                def.id
+            );
+            assert!(
+                min < max,
+                "{}: Slider min ({}) must be < max ({})",
+                def.id,
+                min,
+                max
+            );
+            assert!(
+                *step > 0.0,
+                "{}: Slider step ({}) must be > 0",
+                def.id,
+                step
+            );
+            assert!(
+                default_value >= min && default_value <= max,
+                "{}: Slider default ({}) outside [{}, {}]",
+                def.id,
+                default_value,
+                min,
+                max
+            );
+        }
+    }
+
+    #[test]
+    fn batch_toggle_invariants() {
+        for def in &tweak_catalogue() {
+            let TweakKind::BatchToggle { entries, .. } = &def.kind else {
+                continue;
+            };
+            assert!(
+                !entries.is_empty(),
+                "{}: BatchToggle.entries must not be empty",
+                def.id
+            );
+            // Within one BatchToggle, keys should be unique to avoid edits
+            // overwriting each other in the apply queue.
+            let mut seen: HashSet<String> = HashSet::new();
+            for (i, entry) in entries.iter().enumerate() {
+                assert!(
+                    !entry.key.trim().is_empty(),
+                    "{}: entry[{}] key must not be empty",
+                    def.id,
+                    i
+                );
+                assert!(
+                    !entry.on_value.trim().is_empty(),
+                    "{}: entry[{}] on_value must not be empty",
+                    def.id,
+                    i
+                );
+                if let Some(off) = &entry.off_value {
+                    assert_ne!(
+                        &entry.on_value, off,
+                        "{}: entry[{}] on_value == off_value",
+                        def.id, i
+                    );
+                }
+                let key_lower = entry.key.to_ascii_lowercase();
+                assert!(
+                    seen.insert(key_lower),
+                    "{}: BatchToggle has duplicate key {:?}",
+                    def.id,
+                    entry.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pak_only_tweaks_dont_use_scalability_section() {
+        // pak_only: true means the tweak only edits pak INI files. Putting a
+        // scalability_section on it would suggest Scalability.ini editing, which
+        // contradicts the pak_only flag.
+        for def in &tweak_catalogue() {
+            if !def.pak_only {
+                continue;
+            }
+            match &def.kind {
+                TweakKind::Toggle {
+                    scalability_section: Some(s),
+                    ..
+                }
+                | TweakKind::Slider {
+                    scalability_section: Some(s),
+                    ..
+                } => panic!(
+                    "{}: pak_only tweak should not have scalability_section ({:?})",
+                    def.id, s
+                ),
+                TweakKind::RemoveLines { lines, .. } => {
+                    for (i, line) in lines.iter().enumerate() {
+                        if let Some(s) = &line.scalability_section {
+                            panic!(
+                                "{}: pak_only tweak line[{}] has scalability_section ({:?})",
+                                def.id, i, s
+                            );
+                        }
+                    }
+                }
+                TweakKind::BatchToggle { entries, .. } => {
+                    for (i, entry) in entries.iter().enumerate() {
+                        if let Some(s) = &entry.scalability_section {
+                            panic!(
+                                "{}: pak_only tweak entry[{}] has scalability_section ({:?})",
+                                def.id, i, s
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }

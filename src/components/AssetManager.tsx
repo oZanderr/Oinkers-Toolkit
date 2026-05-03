@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useState, useRef, useMemo, useCallback, useEffect } from "react";
+import { startTransition, useState, useRef, useMemo, useCallback, useEffect } from "react";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { invoke } from "@tauri-apps/api/core";
@@ -7,23 +7,28 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
-  FileAudio,
-  FolderOpen,
-  PackageOpen,
-  Download,
-  FileOutput,
-  Search,
-  Package,
-  PackagePlus,
-  Layers,
-  RefreshCw,
   CheckCircle2,
   CheckSquare2,
-  Square,
+  Copy,
+  Download,
+  FileAudio,
+  FileOutput,
+  FileText,
+  Folder,
+  FolderOpen,
+  Layers,
   MinusSquare,
+  Package,
+  PackageOpen,
+  PackagePlus,
+  RefreshCw,
+  Search,
+  Square,
+  Users,
   XCircle,
 } from "lucide-react";
 
+import { HeroIcon } from "@/components/HeroIcon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,6 +40,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -44,6 +59,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tip } from "@/components/ui/tooltip";
+import {
+  ALL_CATEGORIES,
+  type AssetCategory,
+  CATEGORY_BG_COLOR,
+  CATEGORY_LABEL,
+  CATEGORY_TEXT_COLOR,
+  classifyAssetPath,
+} from "@/lib/assetCategory";
+import { detectHeroIdsInPath } from "@/lib/heroIcons";
+import { emitModsChanged, normalizeFolderPath, onModsChanged } from "@/lib/modsEvents";
+import { useShowHeroIcons } from "@/lib/showHeroIcons";
 import { cn } from "@/lib/utils";
 
 type RepackFormat = "pak" | "iostore";
@@ -60,6 +87,11 @@ type ContentSource = "pak" | "utoc";
 interface ContentEntry {
   path: string;
   source: ContentSource;
+}
+
+interface CharacterSummary {
+  id: number;
+  name: string;
 }
 
 interface Props {
@@ -101,15 +133,40 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     total: number;
   } | null>(null);
   const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
+  const [knownHeroes, setKnownHeroes] = useState<CharacterSummary[]>([]);
+  const [heroFilter, setHeroFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState<Set<AssetCategory>>(
+    () => new Set(ALL_CATEGORIES)
+  );
+  const showHeroIcons = useShowHeroIcons();
   const lastClickedIndex = useRef<number | null>(null);
+  const loadGenRef = useRef(0);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contentsScrollRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listPaksRef = useRef<(silent?: boolean) => Promise<void>>(null!);
 
   // Load game paks on mount
   useEffect(() => {
     if (gamePath) listPaks();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    invoke<CharacterSummary[]>("list_known_heroes")
+      .then(setKnownHeroes)
+      .catch(() => setKnownHeroes([]));
+  }, []);
+
+  // Re-list paks when ~mods composition changes elsewhere (mod install/delete, repack, recursive toggle).
+  useEffect(() => {
+    return onModsChanged((event) => {
+      if (!gamePath) return;
+      const modsFolder = `${gamePath}\\MarvelGame\\Marvel\\Content\\Paks\\~mods`;
+      if (normalizeFolderPath(event.modsFolder) !== normalizeFolderPath(modsFolder)) return;
+      listPaksRef.current(true);
+    });
+  }, [gamePath]);
 
   // Listen for legacy extraction progress events
   useEffect(() => {
@@ -177,12 +234,84 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     [pakContents]
   );
 
-  // Filter against pre-lowered names, debounced input
+  const knownHeroIds = useMemo(() => new Set(knownHeroes.map((h) => h.id)), [knownHeroes]);
+  const heroNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const h of knownHeroes) m.set(h.id, h.name);
+    return m;
+  }, [knownHeroes]);
+
+  // Detect heroes per asset path once per pak load. Cheap (regex + split), but
+  // 50k+ entries warrants caching so virtualizer scroll stays smooth.
+  const heroesByPath = useMemo(() => {
+    if (knownHeroIds.size === 0 || pakContents.length === 0) {
+      return new Map<string, number[]>();
+    }
+    const map = new Map<string, number[]>();
+    for (const e of pakContents) {
+      const ids = detectHeroIdsInPath(e.path, knownHeroIds);
+      if (ids.length > 0) map.set(e.path, ids);
+    }
+    return map;
+  }, [pakContents, knownHeroIds]);
+
+  const categoriesByPath = useMemo(() => {
+    const map = new Map<string, AssetCategory>();
+    for (const e of pakContents) map.set(e.path, classifyAssetPath(e.path));
+    return map;
+  }, [pakContents]);
+
+  const categoryCounts = useMemo(() => {
+    const counts = Object.fromEntries(ALL_CATEGORIES.map((c) => [c, 0])) as Record<
+      AssetCategory,
+      number
+    >;
+    for (const c of categoriesByPath.values()) counts[c]++;
+    return counts;
+  }, [categoriesByPath]);
+
+  const allCategoriesOn = categoryFilter.size === ALL_CATEGORIES.length;
+
+  // Filter against pre-lowered names, debounced input, hero, and category.
   const visible = useMemo(() => {
-    if (!debouncedFilter) return pakContents;
-    const needle = debouncedFilter.toLowerCase();
-    return pakContents.filter((_, i) => pakContentsLower[i].includes(needle));
-  }, [pakContents, pakContentsLower, debouncedFilter]);
+    let list: ContentEntry[] = pakContents;
+    if (debouncedFilter) {
+      const needle = debouncedFilter.toLowerCase();
+      list = pakContents.filter((_, i) => pakContentsLower[i].includes(needle));
+    }
+    if (heroFilter === "unknown") {
+      list = list.filter((e) => !heroesByPath.has(e.path));
+    } else if (heroFilter !== "all") {
+      const id = Number(heroFilter);
+      list = list.filter((e) => heroesByPath.get(e.path)?.includes(id) ?? false);
+    }
+    if (!allCategoriesOn) {
+      list = list.filter((e) => categoryFilter.has(categoriesByPath.get(e.path) ?? "other"));
+    }
+    return list;
+  }, [
+    pakContents,
+    pakContentsLower,
+    debouncedFilter,
+    heroFilter,
+    heroesByPath,
+    categoryFilter,
+    categoriesByPath,
+    allCategoriesOn,
+  ]);
+
+  const toggleCategory = useCallback((cat: AssetCategory) => {
+    setCategoryFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  }, []);
+
+  const setAllCategories = useCallback((on: boolean) => {
+    setCategoryFilter(on ? new Set(ALL_CATEGORIES) : new Set());
+  }, []);
 
   // Debounce filter input (150ms)
   const onFilterChange = useCallback((value: string) => {
@@ -204,12 +333,16 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     overscan: 20,
   });
 
-  async function listPaks() {
-    setNotice(null);
-    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+  listPaksRef.current = listPaks;
+
+  async function listPaks(silent = false) {
+    if (!silent) {
+      setNotice(null);
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    }
 
     if (!gamePath) {
-      showNotice("Set game root in Settings first.", "err");
+      if (!silent) showNotice("Set game root in Settings first.", "err");
       return;
     }
 
@@ -221,7 +354,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       if (paks.length === 0) {
         setSelectedPak("");
         setPakContents([]);
-        showNotice("No .pak files found.", "err");
+        if (!silent) showNotice("No .pak files found.", "err");
       } else {
         if (selectedPak && !paks.some((p) => p.path === selectedPak)) {
           setSelectedPak("");
@@ -229,12 +362,13 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
           setFilterText("");
           setDebouncedFilter("");
         }
-        showNotice(`${paks.length} pak${paks.length !== 1 ? "s" : ""} found`, "ok", {
-          duration: 4000,
-        });
+        if (!silent)
+          showNotice(`${paks.length} pak${paks.length !== 1 ? "s" : ""} found`, "ok", {
+            duration: 4000,
+          });
       }
     } catch (e: unknown) {
-      showNotice(String(e), "err");
+      if (!silent) showNotice(String(e), "err");
     } finally {
       setBusy(false);
     }
@@ -242,6 +376,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
 
   async function inspectPak(pak: string, infoOverride?: PakFileInfo) {
     if (pak === selectedPak) return;
+    const gen = ++loadGenRef.current;
     setSelectedPak(pak);
     setFilterText("");
     setDebouncedFilter("");
@@ -255,6 +390,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         invoke<boolean>("path_exists", { path: pak.replace(/\.pak$/i, ".utoc") }),
         invoke<boolean>("path_exists", { path: pak.replace(/\.pak$/i, ".ucas") }),
       ]);
+      if (gen !== loadGenRef.current) return;
       info = { path: pak, has_utoc: hasUtoc, has_ucas: hasUcas };
     }
     const isIoStore = info.has_utoc && info.has_ucas;
@@ -271,6 +407,8 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
             )
           : Promise.resolve({ ok: true as const, files: [] as string[] }),
       ]);
+
+      if (gen !== loadGenRef.current) return;
 
       const entries: ContentEntry[] = [];
       for (const f of pakFiles) {
@@ -291,9 +429,10 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         showNotice(`${entries.length} file(s) inside ${displayName}`, "ok");
       }
     } catch (e: unknown) {
+      if (gen !== loadGenRef.current) return;
       showNotice(String(e), "err");
     } finally {
-      setBusy(false);
+      if (gen === loadGenRef.current) setBusy(false);
     }
   }
 
@@ -366,6 +505,38 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     }
   }
 
+  async function copyToClipboard(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showNotice(`Copied ${label}`, "ok");
+    } catch (e: unknown) {
+      showNotice(`Copy failed: ${String(e)}`, "err");
+    }
+  }
+
+  function parentDir(p: string): string {
+    const idx = p.lastIndexOf("/");
+    return idx > 0 ? p.slice(0, idx) : "";
+  }
+
+  function selectByExtension(ext: string) {
+    const lowered = `.${ext.toLowerCase()}`;
+    const next = new Set<string>();
+    for (const e of visible) {
+      if (e.path.toLowerCase().endsWith(lowered)) next.add(e.path);
+    }
+    if (next.size === 0) {
+      showNotice(`No ${ext.toUpperCase()} files in view`, "info", { duration: 3000 });
+      return;
+    }
+    startTransition(() => setSelectedEntries(next));
+    showNotice(`Selected ${next.size} ${ext.toUpperCase()} file(s)`, "ok", { duration: 3000 });
+  }
+
+  function clearEntrySelection() {
+    setSelectedEntries(new Set());
+  }
+
   async function extractSingleEntry(entry: ContentEntry) {
     const outPath = await save({ defaultPath: entry.path.split("/").pop() });
     if (!outPath) return;
@@ -386,6 +557,47 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         });
       }
       showNotice(`Extracted: ${outPath}`, "ok", { revealPath: outPath });
+    } catch (e: unknown) {
+      showNotice(String(e), "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function extractSingleEntryWithFolders(entry: ContentEntry) {
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || typeof dir !== "string") return;
+
+    const pakBaseName =
+      selectedPak
+        .replace(/\\/g, "/")
+        .split("/")
+        .pop()
+        ?.replace(/\.pak$/i, "") ?? "output";
+    const outputDir = `${dir}\\${pakBaseName}`;
+
+    setBusy(true);
+    showNotice("Extracting…", "info");
+    try {
+      let extracted: string[] = [];
+      if (entry.source === "utoc") {
+        const utocPath = selectedPak.replace(/\.pak$/i, ".utoc");
+        extracted = await invoke<string[]>("extract_utoc_files", {
+          utocPath,
+          fileNames: [entry.path],
+          outputDir,
+        });
+      } else {
+        extracted = await invoke<string[]>("extract_pak_files", {
+          pakPath: selectedPak,
+          fileNames: [entry.path],
+          outputDir,
+        });
+      }
+      const revealPath = extracted[0]
+        ? `${outputDir}\\${extracted[0].replace(/\//g, "\\")}`
+        : outputDir;
+      showNotice(`Extracted to ${outputDir}`, "ok", { revealPath });
     } catch (e: unknown) {
       showNotice(String(e), "err");
     } finally {
@@ -504,13 +716,35 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
   }
 
   function toggleSelectAll() {
-    setSelectedEntries((prev) => {
-      if (prev.size === visible.length && visible.every((e) => prev.has(e.path))) {
-        return new Set();
-      }
-      return new Set(visible.map((e) => e.path));
+    startTransition(() => {
+      setSelectedEntries((prev) => {
+        if (prev.size === visible.length && visible.every((e) => prev.has(e.path))) {
+          return new Set();
+        }
+        return new Set(visible.map((e) => e.path));
+      });
     });
   }
+
+  // Ctrl/Cmd+A selects all visible asset rows. Skips when focus is inside an
+  // input/textarea/contentEditable so native text-select still works, and
+  // skips when AssetManager is in a hidden tab (offsetParent === null).
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || e.key !== "a") return;
+      const root = rootRef.current;
+      if (!root || root.offsetParent === null) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (visible.length === 0) return;
+      e.preventDefault();
+      startTransition(() => {
+        setSelectedEntries(new Set(visible.map((entry) => entry.path)));
+      });
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [visible]);
 
   const selectedPakEntries = useMemo(
     () => pakContents.filter((e) => selectedEntries.has(e.path) && e.source === "pak"),
@@ -523,15 +757,25 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       ),
     [pakContents, selectedEntries]
   );
-
-  const hasSelectedBnk = useMemo(
-    () =>
-      [...selectedEntries].some((p) => {
-        const name = p.split("/").pop()?.toLowerCase();
-        return name === "bnk_ui_battle.bnk";
-      }),
-    [selectedEntries]
+  const selectedUtocEntriesAll = useMemo(
+    () => pakContents.filter((e) => selectedEntries.has(e.path) && e.source === "utoc"),
+    [pakContents, selectedEntries]
   );
+
+  const allVisibleSelected = useMemo(
+    () =>
+      selectedEntries.size > 0 &&
+      selectedEntries.size === visible.length &&
+      visible.every((e) => selectedEntries.has(e.path)),
+    [selectedEntries, visible]
+  );
+
+  const hasSelectedBnk = useMemo(() => {
+    for (const p of selectedEntries) {
+      if (p.split("/").pop()?.toLowerCase() === "bnk_ui_battle.bnk") return true;
+    }
+    return false;
+  }, [selectedEntries]);
 
   async function extractSelected() {
     if (selectedEntries.size === 0 || !selectedPak) return;
@@ -561,9 +805,9 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         totalFiles += extracted.length;
       }
 
-      if (selectedUtocEntries.length > 0) {
+      if (selectedUtocEntriesAll.length > 0) {
         const utocPath = selectedPak.replace(/\.pak$/i, ".utoc");
-        const names = selectedUtocEntries.map((e) => e.path);
+        const names = selectedUtocEntriesAll.map((e) => e.path);
         const extracted = await invoke<string[]>("extract_utoc_files", {
           utocPath,
           fileNames: names,
@@ -582,15 +826,15 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     }
   }
 
-  async function extractHitsoundWavs() {
+  async function extractSoundWavs() {
     if (!selectedPak) return;
     const dir = await open({ directory: true, multiple: false });
     if (!dir || typeof dir !== "string") return;
 
     setBusy(true);
-    showNotice("Extracting hitsound WAVs\u2026", "info");
+    showNotice("Extracting sound WAVs\u2026", "info");
     try {
-      const result = await invoke<string>("extract_hitsound_wavs", {
+      const result = await invoke<string>("extract_sound_wavs", {
         gameRoot: gamePath,
         pakPath: selectedPak,
         outputDir: dir,
@@ -603,6 +847,44 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     } catch (e: unknown) {
       showNotice(String(e), "err");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportLegacySingle(entry: ContentEntry) {
+    if (!selectedPak) return;
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || typeof dir !== "string") return;
+
+    const pakBaseName =
+      selectedPak
+        .replace(/\\/g, "/")
+        .split("/")
+        .pop()
+        ?.replace(/\.pak$/i, "") ?? "output";
+    const outputDir = `${dir}\\${pakBaseName}`;
+    const utocPath = selectedPak.replace(/\.pak$/i, ".utoc");
+    const filter = [entry.path];
+
+    setBusy(true);
+    showNotice("Counting packages\u2026", "info");
+    try {
+      const count = await invoke<number>("count_utoc_legacy_packages", {
+        utocPath,
+        gameRoot: gamePath,
+        filter,
+      });
+      setBusy(false);
+      setNotice(null);
+
+      if (count > 500) {
+        setLegacyConfirm({ count, utocPath, outputDir, filter });
+        return;
+      }
+
+      await runLegacyExtraction(utocPath, outputDir, filter);
+    } catch (e: unknown) {
+      showNotice(String(e), "err");
       setBusy(false);
     }
   }
@@ -668,6 +950,10 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         await invoke("repack_iostore", { inputDir, outputUtoc });
         setRepackProgress(null);
         showNotice(`Repacked IoStore to: ${outputUtoc}`, "ok", { revealPath: outputUtoc });
+        emitModsChanged({
+          modsFolder: outputUtoc.replace(/[\\/][^\\/]+$/, ""),
+          source: "AssetManager",
+        });
       } catch (e: unknown) {
         setRepackProgress(null);
         showNotice(String(e), "err");
@@ -687,6 +973,10 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       try {
         await invoke("repack_pak", { inputDir, outputPak });
         showNotice(`Repacked to: ${outputPak}`, "ok", { revealPath: outputPak });
+        emitModsChanged({
+          modsFolder: outputPak.replace(/[\\/][^\\/]+$/, ""),
+          source: "AssetManager",
+        });
       } catch (e: unknown) {
         showNotice(String(e), "err");
       } finally {
@@ -703,30 +993,31 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       : `${visible.length} file(s)${visible.length !== pakContents.length ? ` of ${pakContents.length}` : ""} inside ${pakName} \u2014 click to select, double-click to extract`;
 
   return (
-    <div className="flex flex-1 min-h-0 flex-col gap-4">
+    <div ref={rootRef} className="flex flex-1 min-h-0 flex-col gap-4">
       <div className="flex min-h-8 shrink-0 items-center gap-3">
         <h2 className="shrink-0 text-xl font-bold">Asset Manager</h2>
         {notice && (
-          <span
-            className={cn(
-              "flex min-w-0 items-center gap-1.5 truncate text-[12px] font-medium",
-              notice.type === "ok"
-                ? "text-ok"
-                : notice.type === "err"
-                  ? "text-err"
-                  : "text-muted-foreground",
-              notice.revealPath && "cursor-pointer hover:underline"
-            )}
-            onClick={notice.revealPath ? () => revealItemInDir(notice.revealPath!) : undefined}
-            title={notice.revealPath ? "Click to reveal in explorer" : undefined}
-          >
-            {notice.type === "ok" ? (
-              <CheckCircle2 className="shrink-0" size={14} strokeWidth={2.5} />
-            ) : notice.type === "err" ? (
-              <XCircle className="shrink-0" size={14} strokeWidth={2.5} />
-            ) : null}
-            <span className="truncate">{notice.msg}</span>
-          </span>
+          <Tip content="Click to reveal in explorer" disabled={!notice.revealPath}>
+            <span
+              className={cn(
+                "flex min-w-0 items-center gap-1.5 truncate text-[12px] font-medium",
+                notice.type === "ok"
+                  ? "text-ok"
+                  : notice.type === "err"
+                    ? "text-err"
+                    : "text-muted-foreground",
+                notice.revealPath && "cursor-pointer hover:underline"
+              )}
+              onClick={notice.revealPath ? () => revealItemInDir(notice.revealPath!) : undefined}
+            >
+              {notice.type === "ok" ? (
+                <CheckCircle2 className="shrink-0" size={14} strokeWidth={2.5} />
+              ) : notice.type === "err" ? (
+                <XCircle className="shrink-0" size={14} strokeWidth={2.5} />
+              ) : null}
+              <span className="truncate">{notice.msg}</span>
+            </span>
+          </Tip>
         )}
         {legacyProgress && (
           <div className="flex min-w-0 items-center gap-2">
@@ -815,24 +1106,16 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
             <div className="flex shrink-0 items-center justify-between gap-1.5 border-b border-border bg-card px-3 py-2">
               <h3 className="text-sm font-semibold">Game Paks</h3>
               <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={openPak}
-                  disabled={busy}
-                  title="Browse for a pak file"
-                >
-                  <FolderOpen size={15} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={listPaks}
-                  disabled={busy}
-                  title="Refresh game paks"
-                >
-                  <RefreshCw size={15} />
-                </Button>
+                <Tip content="Browse for a pak file">
+                  <Button variant="ghost" size="icon-sm" onClick={openPak} disabled={busy}>
+                    <FolderOpen size={15} />
+                  </Button>
+                </Tip>
+                <Tip content="Refresh game paks">
+                  <Button variant="ghost" size="icon-sm" onClick={() => listPaks()} disabled={busy}>
+                    <RefreshCw size={15} />
+                  </Button>
+                </Tip>
               </div>
             </div>
 
@@ -859,34 +1142,34 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                     const displayName =
                       isMod && modsIdx !== -1 ? p.slice(modsIdx + 1).replace(/\\/g, "/") : fileName;
                     return (
-                      <li
-                        key={p}
-                        className={cn(
-                          "flex items-center gap-2 border-b border-border/50 px-3 py-2 last:border-none",
-                          "cursor-pointer",
-                          isSelected ? "bg-secondary text-foreground" : "hover:bg-secondary/50"
-                        )}
-                        onClick={() => inspectPak(p)}
-                        title={fileName}
-                      >
-                        {isManual ? (
-                          <PackagePlus size={14} className="shrink-0 text-sky-400" />
-                        ) : (
-                          <Package
-                            size={14}
-                            className={cn(
-                              "shrink-0",
-                              isMod ? "text-amber-400" : "text-muted-foreground"
-                            )}
-                          />
-                        )}
-                        <span className="flex-1 truncate text-[12px]">{displayName}</span>
-                        {isIoStore && (
-                          <span className="shrink-0 rounded bg-ok/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
-                            IoStore
-                          </span>
-                        )}
-                      </li>
+                      <Tip key={p} content={fileName} side="top" align="end">
+                        <li
+                          className={cn(
+                            "flex items-center gap-2 border-b border-border/50 px-3 py-2 last:border-none",
+                            "cursor-pointer",
+                            isSelected ? "bg-secondary text-foreground" : "hover:bg-secondary/50"
+                          )}
+                          onClick={() => inspectPak(p)}
+                        >
+                          {isManual ? (
+                            <PackagePlus size={14} className="shrink-0 text-sky-400" />
+                          ) : (
+                            <Package
+                              size={14}
+                              className={cn(
+                                "shrink-0",
+                                isMod ? "text-amber-400" : "text-muted-foreground"
+                              )}
+                            />
+                          )}
+                          <span className="flex-1 truncate text-[12px]">{displayName}</span>
+                          {isIoStore && (
+                            <span className="shrink-0 rounded bg-ok/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
+                              IoStore
+                            </span>
+                          )}
+                        </li>
+                      </Tip>
                     );
                   })}
                 </ul>
@@ -901,85 +1184,110 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
             {/* Title + actions */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-                <h3 className="truncate text-sm font-semibold" title={selectedPak || ""}>
-                  {pakName ?? "Contents"}
-                </h3>
-                <span
-                  className={cn(
-                    "truncate text-[11px] text-muted-foreground",
-                    !selectedPak && "invisible"
-                  )}
-                  title={selectedPak || ""}
+                <Tip
+                  content={selectedPak || ""}
+                  disabled={!selectedPak}
+                  side="bottom"
+                  align="start"
                 >
-                  {selectedPak || "\u00A0"}
-                </span>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <h3 className="truncate text-sm font-semibold">{pakName ?? "Contents"}</h3>
+                    {selectedPak && (
+                      <span className="shrink-0 rounded bg-ok/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
+                        {selectedIsIoStore ? "iostore" : "pak"}
+                      </span>
+                    )}
+                  </div>
+                </Tip>
+                <Tip
+                  content={selectedPak || ""}
+                  disabled={!selectedPak}
+                  side="bottom"
+                  align="start"
+                >
+                  <span
+                    className={cn(
+                      "truncate text-[11px] text-muted-foreground",
+                      !selectedPak && "invisible"
+                    )}
+                  >
+                    {selectedPak || "\u00A0"}
+                  </span>
+                </Tip>
               </div>
 
               <div className="flex shrink-0 items-center gap-1 overflow-visible py-1 -my-1 pr-1 -mr-1">
                 {hasSelectedBnk && (
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={extractHitsoundWavs}
-                    disabled={busy || !selectedPak || !gamePath}
-                    title="Extract hitsound WAVs from this mod's soundbank"
-                  >
-                    <FileAudio size={15} />
-                  </Button>
+                  <Tip content="Extract sound WAVs from this mod's soundbank">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={extractSoundWavs}
+                      disabled={busy || !selectedPak || !gamePath}
+                    >
+                      <FileAudio size={15} />
+                    </Button>
+                  </Tip>
                 )}
                 {selectedEntries.size > 0 &&
                   selectedIsIoStore &&
                   selectedUtocEntries.length > 0 && (
+                    <Tip
+                      content={`Convert ${selectedUtocEntries.length} selected IoStore assets to legacy format`}
+                    >
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="relative"
+                        onClick={exportLegacySelected}
+                        disabled={busy || !selectedPak}
+                      >
+                        <FileOutput size={15} />
+                        <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-1 text-[8px] font-bold leading-none text-background">
+                          {selectedUtocEntries.length}
+                        </span>
+                      </Button>
+                    </Tip>
+                  )}
+                {selectedEntries.size > 0 ? (
+                  <Tip content={`Extract ${selectedEntries.size} selected files`}>
                     <Button
                       variant="ghost"
                       size="icon-sm"
                       className="relative"
-                      onClick={exportLegacySelected}
+                      onClick={extractSelected}
                       disabled={busy || !selectedPak}
-                      title={`Convert ${selectedUtocEntries.length} selected IoStore assets to legacy format`}
                     >
-                      <FileOutput size={15} />
+                      <Download size={15} />
                       <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-1 text-[8px] font-bold leading-none text-background">
-                        {selectedUtocEntries.length}
+                        {selectedEntries.size}
                       </span>
                     </Button>
-                  )}
-                {selectedEntries.size > 0 ? (
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="relative"
-                    onClick={extractSelected}
-                    disabled={busy || !selectedPak}
-                    title={`Extract ${selectedEntries.size} selected files`}
-                  >
-                    <Download size={15} />
-                    <span className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-1 text-[8px] font-bold leading-none text-background">
-                      {selectedEntries.size}
-                    </span>
-                  </Button>
+                  </Tip>
                 ) : (
                   <>
                     {selectedIsIoStore && (
+                      <Tip content="Convert IoStore assets to legacy .uasset/.uexp for UAssetGUI">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={exportLegacy}
+                          disabled={busy || !selectedPak}
+                        >
+                          <FileOutput size={15} />
+                        </Button>
+                      </Tip>
+                    )}
+                    <Tip content="Extract all files">
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        onClick={exportLegacy}
+                        onClick={unpackSelected}
                         disabled={busy || !selectedPak}
-                        title="Convert IoStore assets to legacy .uasset/.uexp for UAssetGUI"
                       >
-                        <FileOutput size={15} />
+                        <Download size={15} />
                       </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={unpackSelected}
-                      disabled={busy || !selectedPak}
-                      title="Extract all files"
-                    >
-                      <Download size={15} />
-                    </Button>
+                    </Tip>
                   </>
                 )}
               </div>
@@ -988,25 +1296,23 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
             {/* Filter + select-all */}
             <div className="flex items-center gap-2">
               {selectedPak && (
-                <button
-                  className={cn(
-                    "flex shrink-0 items-center text-muted-foreground hover:text-foreground",
-                    visible.length === 0 && "invisible"
-                  )}
-                  onClick={toggleSelectAll}
-                  title={
-                    selectedEntries.size === visible.length ? "Deselect all" : "Select all visible"
-                  }
-                >
-                  {selectedEntries.size === 0 ? (
-                    <Square size={16} />
-                  ) : selectedEntries.size === visible.length &&
-                    visible.every((e) => selectedEntries.has(e.path)) ? (
-                    <CheckSquare2 size={16} />
-                  ) : (
-                    <MinusSquare size={16} />
-                  )}
-                </button>
+                <Tip content={allVisibleSelected ? "Deselect all" : "Select all visible"}>
+                  <button
+                    className={cn(
+                      "flex shrink-0 items-center text-muted-foreground hover:text-foreground",
+                      visible.length === 0 && "invisible"
+                    )}
+                    onClick={toggleSelectAll}
+                  >
+                    {selectedEntries.size === 0 ? (
+                      <Square size={14} />
+                    ) : allVisibleSelected ? (
+                      <CheckSquare2 size={14} />
+                    ) : (
+                      <MinusSquare size={14} />
+                    )}
+                  </button>
+                </Tip>
               )}
               <div className="relative min-w-0 flex-1">
                 <Search
@@ -1014,14 +1320,74 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                   className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
                 />
                 <Input
-                  className="pl-7 font-mono text-xs"
+                  className="h-8 pl-7 font-mono text-xs"
                   placeholder="Filter files…"
                   value={filterText}
                   onChange={(e) => onFilterChange(e.target.value)}
                   disabled={!selectedPak}
                 />
               </div>
+              <Select value={heroFilter} onValueChange={setHeroFilter} disabled={!selectedPak}>
+                <Tip content="Filter assets by hero">
+                  <SelectTrigger size="sm" className="w-42.5 px-2 text-[12px]">
+                    <Users size={12} className="text-muted-foreground" />
+                    <SelectValue placeholder="All heroes" />
+                  </SelectTrigger>
+                </Tip>
+                <SelectContent className="max-h-72">
+                  <SelectItem value="all">All heroes</SelectItem>
+                  <SelectItem value="unknown">Unknown / no match</SelectItem>
+                  {knownHeroes.map((h) => (
+                    <SelectItem key={h.id} value={String(h.id)}>
+                      <span className="flex items-center gap-2">
+                        <HeroIcon characterId={h.id} name={h.name} size={16} />
+                        {h.name}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
+
+            {/* Category chip row */}
+            {selectedPak && (
+              <div className="flex flex-wrap items-center gap-1">
+                <button
+                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground hover:text-foreground"
+                  onClick={() => setAllCategories(true)}
+                  disabled={allCategoriesOn}
+                >
+                  All
+                </button>
+                <button
+                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground hover:text-foreground"
+                  onClick={() => setAllCategories(false)}
+                  disabled={categoryFilter.size === 0}
+                >
+                  None
+                </button>
+                <span className="mx-1 h-3 w-px bg-border" />
+                {ALL_CATEGORIES.filter((c) => categoryCounts[c] > 0).map((cat) => {
+                  const active = categoryFilter.has(cat);
+                  return (
+                    <button
+                      key={cat}
+                      onClick={() => toggleCategory(cat)}
+                      className={cn(
+                        "flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase transition-opacity",
+                        CATEGORY_BG_COLOR[cat],
+                        CATEGORY_TEXT_COLOR[cat],
+                        active ? "opacity-100" : "opacity-30 hover:opacity-60"
+                      )}
+                      title={`${CATEGORY_LABEL[cat]} (${categoryCounts[cat]})`}
+                    >
+                      <span>{CATEGORY_LABEL[cat]}</span>
+                      <span className="text-[9px] opacity-70">{categoryCounts[cat]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* File list — always rendered */}
@@ -1044,34 +1410,171 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                 {contentsVirtualizer.getVirtualItems().map((vRow) => {
                   const entry = visible[vRow.index];
                   const isChecked = selectedEntries.has(entry.path);
+                  const fileName = entry.path.split("/").pop() ?? entry.path;
+                  const folderPath = parentDir(entry.path);
+                  const ext = fileName.includes(".") ? (fileName.split(".").pop() ?? "") : "";
+                  const showExtractSelected = isChecked && selectedEntries.size > 1;
                   return (
-                    <div
-                      key={vRow.index}
-                      className={cn(
-                        "absolute left-0 top-0 flex w-full cursor-pointer items-center gap-2 border-b border-border/50 px-3",
-                        isChecked ? "bg-secondary/80" : "hover:bg-secondary/50"
-                      )}
-                      style={{
-                        height: `${vRow.size}px`,
-                        transform: `translateY(${vRow.start}px)`,
-                      }}
-                      onClick={(e) => handleEntryClick(vRow.index, e)}
-                      onDoubleClick={() => extractSingleEntry(entry)}
-                      title={entry.path}
-                    >
-                      {isChecked ? (
-                        <CheckSquare2 size={13} className="shrink-0 text-foreground" />
-                      ) : (
-                        <Square size={13} className="shrink-0 text-muted-foreground/50" />
-                      )}
-                      <span className="shrink-0 text-muted-foreground">{fileIcon(entry.path)}</span>
-                      <span className="truncate font-mono text-[11px]">{entry.path}</span>
-                      {entry.source === "utoc" && (
-                        <span className="ml-auto shrink-0 rounded bg-ok/15 px-1 py-0.5 text-[8px] font-semibold uppercase leading-none text-ok">
-                          utoc
-                        </span>
-                      )}
-                    </div>
+                    <ContextMenu key={vRow.index}>
+                      <ContextMenuTrigger asChild>
+                        <div
+                          className={cn(
+                            "absolute left-0 top-0 flex w-full cursor-pointer items-center gap-2 border-b border-border/50 px-3",
+                            isChecked ? "bg-secondary/80" : "hover:bg-secondary/50"
+                          )}
+                          style={{
+                            height: `${vRow.size}px`,
+                            transform: `translateY(${vRow.start}px)`,
+                          }}
+                          onClick={(e) => handleEntryClick(vRow.index, e)}
+                          onDoubleClick={() => extractSingleEntry(entry)}
+                          title={entry.path}
+                        >
+                          {isChecked ? (
+                            <CheckSquare2 size={13} className="shrink-0 text-foreground" />
+                          ) : (
+                            <Square size={13} className="shrink-0 text-muted-foreground/50" />
+                          )}
+                          {(() => {
+                            const cat = categoriesByPath.get(entry.path) ?? "other";
+                            const heroIds = showHeroIcons ? heroesByPath.get(entry.path) : null;
+                            if (heroIds && heroIds.length > 0) {
+                              return (
+                                <span className="flex shrink-0 items-center -space-x-1">
+                                  {heroIds.slice(0, 2).map((id) => (
+                                    <HeroIcon
+                                      key={id}
+                                      characterId={id}
+                                      name={heroNameById.get(id)}
+                                      size={16}
+                                      className="ring-1 ring-background"
+                                    />
+                                  ))}
+                                </span>
+                              );
+                            }
+                            return (
+                              <Tip content={CATEGORY_LABEL[cat]} side="top" align="start">
+                                <span className={cn("shrink-0", CATEGORY_TEXT_COLOR[cat])}>
+                                  <Package size={12} />
+                                </span>
+                              </Tip>
+                            );
+                          })()}
+                          <span className="truncate font-mono text-[11px]">{entry.path}</span>
+                        </div>
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuItem
+                          onSelect={() => {
+                            if (showExtractSelected) {
+                              const paths = [...selectedEntries].sort().join("\n");
+                              copyToClipboard(paths, `${selectedEntries.size} paths`);
+                            } else {
+                              copyToClipboard(entry.path, "path");
+                            }
+                          }}
+                        >
+                          <Copy />
+                          {showExtractSelected ? `Copy ${selectedEntries.size} Paths` : "Copy Path"}
+                        </ContextMenuItem>
+                        <ContextMenuItem
+                          onSelect={() => {
+                            if (showExtractSelected) {
+                              const names = [...selectedEntries]
+                                .sort()
+                                .map((p) => p.split("/").pop() ?? p)
+                                .join("\n");
+                              copyToClipboard(names, `${selectedEntries.size} file names`);
+                            } else {
+                              copyToClipboard(fileName, "file name");
+                            }
+                          }}
+                        >
+                          <FileText />
+                          {showExtractSelected
+                            ? `Copy ${selectedEntries.size} File Names`
+                            : "Copy File Name"}
+                        </ContextMenuItem>
+                        <ContextMenuItem
+                          onSelect={() => {
+                            if (showExtractSelected) {
+                              const folders = [
+                                ...new Set(
+                                  [...selectedEntries].map((p) => parentDir(p)).filter(Boolean)
+                                ),
+                              ]
+                                .sort()
+                                .join("\n");
+                              copyToClipboard(folders, "folder paths");
+                            } else {
+                              copyToClipboard(folderPath, "folder path");
+                            }
+                          }}
+                          disabled={!showExtractSelected && !folderPath}
+                        >
+                          <Folder />
+                          {showExtractSelected ? "Copy Folder Paths" : "Copy Folder Path"}
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        {showExtractSelected ? (
+                          <ContextMenuItem onSelect={() => extractSelected()}>
+                            <PackageOpen />
+                            Extract {selectedEntries.size} Selected…
+                          </ContextMenuItem>
+                        ) : (
+                          <ContextMenuSub>
+                            <ContextMenuSubTrigger>
+                              <Download />
+                              Extract
+                            </ContextMenuSubTrigger>
+                            <ContextMenuSubContent>
+                              <ContextMenuItem onSelect={() => extractSingleEntry(entry)}>
+                                <FileText />
+                                File only…
+                              </ContextMenuItem>
+                              <ContextMenuItem
+                                onSelect={() => extractSingleEntryWithFolders(entry)}
+                              >
+                                <Folder />
+                                With folder structure…
+                              </ContextMenuItem>
+                              {fileName.toLowerCase() === "bnk_ui_battle.bnk" && (
+                                <ContextMenuItem onSelect={() => extractSoundWavs()}>
+                                  <FileAudio />
+                                  WAVs from BNK…
+                                </ContextMenuItem>
+                              )}
+                            </ContextMenuSubContent>
+                          </ContextMenuSub>
+                        )}
+                        {entry.source === "utoc" && !entry.path.endsWith(".ubulk") && (
+                          <ContextMenuItem
+                            onSelect={() =>
+                              selectedUtocEntries.length > 0
+                                ? exportLegacySelected()
+                                : exportLegacySingle(entry)
+                            }
+                          >
+                            <FileOutput />
+                            {selectedUtocEntries.length > 1
+                              ? `Export ${selectedUtocEntries.length} Legacy (.uasset/.uexp)…`
+                              : "Export Legacy (.uasset/.uexp)…"}
+                          </ContextMenuItem>
+                        )}
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onSelect={() => selectByExtension(ext)} disabled={!ext}>
+                          <Layers />
+                          Select All .{ext || "ext"}
+                        </ContextMenuItem>
+                        {selectedEntries.size > 0 && (
+                          <ContextMenuItem onSelect={clearEntrySelection}>
+                            <XCircle />
+                            Clear Selection
+                          </ContextMenuItem>
+                        )}
+                      </ContextMenuContent>
+                    </ContextMenu>
                   );
                 })}
               </div>
@@ -1081,9 +1584,9 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
           {/* Footer */}
           {selectedPak && footerText && (
             <div className="shrink-0 border-t border-border bg-card px-3 py-1.5">
-              <p className="truncate text-[11px] text-muted-foreground" title={footerText}>
-                {footerText}
-              </p>
+              <Tip content={footerText} side="top" align="start">
+                <p className="truncate text-[11px] text-muted-foreground">{footerText}</p>
+              </Tip>
             </div>
           )}
         </div>
@@ -1129,25 +1632,4 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       </AlertDialog>
     </div>
   );
-}
-
-function fileIcon(name: string): React.ReactNode {
-  const ext = name.split(".").pop()?.toLowerCase();
-  const cls = "shrink-0";
-  switch (ext) {
-    case "uasset":
-      return <Package size={12} className={cn(cls, "text-blue-400")} />;
-    case "umap":
-      return <Package size={12} className={cn(cls, "text-purple-400")} />;
-    case "png":
-    case "jpg":
-      return <Package size={12} className={cn(cls, "text-green-400")} />;
-    case "wav":
-    case "ogg":
-      return <Package size={12} className={cn(cls, "text-yellow-400")} />;
-    case "pak":
-      return <Package size={12} className={cn(cls, "text-orange-400")} />;
-    default:
-      return <Package size={12} className={cn(cls, "text-muted-foreground")} />;
-  }
 }

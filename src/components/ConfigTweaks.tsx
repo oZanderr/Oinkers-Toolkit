@@ -5,11 +5,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { CheckCircle2, FileText, Package, Trash2, UploadCloud, XCircle } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-
 import { PakTweaks } from "./PakTweaks";
 import { ScalabilityTweaks } from "./ScalabilityTweaks";
+
+import { Button } from "@/components/ui/button";
+import { Tip } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 type SubTab = "scalability" | "pak-config";
 
@@ -107,8 +108,23 @@ export function ConfigTweaks({ gamePath, isActive }: Props) {
     return () => unlisten?.();
   }, []);
 
-  /** Redetect the Scalability.ini path only — does not reset tweak states */
+  /** Used on mount: detects path and loads file content. */
   async function detectPath() {
+    setDetecting(true);
+    setDetectBadge(null);
+    try {
+      const p = await invoke<string>("get_scalability_path");
+      setFilePath(p);
+      await loadFile(p);
+    } catch {
+      // no-op on mount
+    } finally {
+      setDetecting(false);
+    }
+  }
+
+  /** Button handler: detects path only, does not load file content. */
+  async function detectPathOnly() {
     setDetecting(true);
     setDetectBadge(null);
     try {
@@ -116,7 +132,6 @@ export function ConfigTweaks({ gamePath, isActive }: Props) {
       const hadPath = filePath !== "";
       const pathChanged = p !== filePath;
       setFilePath(p);
-      await loadFile(p);
       if (pathChanged) {
         if (hadPath) showDetectBadge("Path updated");
       } else {
@@ -138,6 +153,7 @@ export function ConfigTweaks({ gamePath, isActive }: Props) {
   async function reloadContent() {
     await loadFile(filePath);
     setReloadSignal((s) => s + 1);
+    showDetectBadge("Reloaded");
   }
 
   async function browse() {
@@ -189,17 +205,16 @@ export function ConfigTweaks({ gamePath, isActive }: Props) {
             {shaderNotice.msg}
           </span>
         )}
-        <div className="ml-auto">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={clearShaderCache}
-            title="Recommended after changing config tweaks"
-          >
-            <Trash2 size={13} />
-            Clear Shader Cache
-          </Button>
-        </div>
+        {subTab === "pak-config" && (
+          <div className="ml-auto">
+            <Tip content="Recommended after changing config tweaks">
+              <Button variant="outline" size="sm" onClick={clearShaderCache}>
+                <Trash2 size={13} />
+                Clear Shader Cache
+              </Button>
+            </Tip>
+          </div>
+        )}
       </div>
 
       {/* Sub-tab bar */}
@@ -245,7 +260,7 @@ export function ConfigTweaks({ gamePath, isActive }: Props) {
           reloadSignal={reloadSignal}
           detectBadge={detectBadge}
           detecting={detecting}
-          onDetect={detectPath}
+          onDetect={detectPathOnly}
           onBrowse={browse}
           onSaved={(newContent) => {
             setFileExists(true);

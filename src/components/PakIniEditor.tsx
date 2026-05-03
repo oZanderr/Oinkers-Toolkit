@@ -14,6 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  AlertTriangle,
   CheckCircle2,
   XCircle,
   RefreshCw,
@@ -21,11 +22,13 @@ import {
   Search,
   FolderOpen,
   FileText,
+  ListRestart,
   CaseSensitive,
   ChevronUp,
   ChevronDown,
   Replace,
   ReplaceAll,
+  Undo2,
   UploadCloud,
   X,
 } from "lucide-react";
@@ -39,6 +42,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tip } from "@/components/ui/tooltip";
+import { normalizeFolderPath, onModsChanged } from "@/lib/modsEvents";
+import { emitPakChanged, onPakChanged } from "@/lib/pakEvents";
 import { cn } from "@/lib/utils";
 
 // ── Types matching Rust backend ─────────────────────────────────────
@@ -63,6 +69,7 @@ type NoticeType = "ok" | "err" | "info";
 interface Props {
   gamePath: string;
   isActive: boolean;
+  gameRunning: boolean;
 }
 
 // ── Search highlight CM extension ───────────────────────────────────
@@ -129,7 +136,7 @@ const searchExtension = [searchConfigField, searchHighlightPlugin];
 
 // ── Component ───────────────────────────────────────────────────────
 
-export function PakIniEditor({ gamePath, isActive }: Props) {
+export function PakIniEditor({ gamePath, isActive, gameRunning }: Props) {
   // ── Pak selection ──
   const [paks, setPaks] = useState<PakIniInfo[]>([]);
   const [selectedPak, setSelectedPak] = useState<PakIniInfo | null>(null);
@@ -155,6 +162,8 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
   // ── CodeMirror ──
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
+  // Bumped on disk reload / pak switch to force editor recreation.
+  const [pakEpoch, setPakEpoch] = useState(0);
 
   // ── Drag-and-drop ──
   const [isDragging, setIsDragging] = useState(false);
@@ -202,11 +211,33 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
         const results = await invoke<PakIniInfo[]>("scan_mod_paks_for_ini", {
           gameRoot: gamePath,
         });
-        setPaks(results);
-        if (results.length === 0) {
+        // Re-inspect manually-browsed paks not in the folder scan; drop those that no longer have INI entries.
+        const manualOnly = paks.filter((p) => !results.find((r) => r.pak_path === p.pak_path));
+        const inspectedManual = await Promise.all(
+          manualOnly.map(async (pak) => {
+            try {
+              return await invoke<PakIniInfo | null>("inspect_pak_path", {
+                pakPath: pak.pak_path,
+              });
+            } catch {
+              return null;
+            }
+          })
+        );
+        const retainedManual = inspectedManual.filter((p): p is PakIniInfo => p !== null);
+        const merged = [...results, ...retainedManual];
+        setPaks(merged);
+        if (selectedPak && !merged.find((p) => p.pak_path === selectedPak.pak_path)) {
+          setSelectedPak(null);
+          setDpContent(null);
+          setEngineContent(null);
+          setSavedDp(null);
+          setSavedEngine(null);
+        }
+        if (merged.length === 0) {
           if (!silent) showNotice("No config mods found", "info");
         } else if (!silent) {
-          showNotice(`Found ${results.length} config mod${results.length !== 1 ? "s" : ""}`, "ok");
+          showNotice(`Found ${merged.length} config mod${merged.length !== 1 ? "s" : ""}`, "ok");
         }
       } catch (e) {
         console.error("Scan failed:", e);
@@ -215,7 +246,7 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
         setScanning(false);
       }
     },
-    [gamePath]
+    [gamePath, paks, selectedPak]
   );
 
   async function browse() {
@@ -276,7 +307,22 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
     return () => unlisten?.();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // External pak mutation: reload if affecting current pak and clean.
+  useEffect(() => {
+    if (!selectedPak) return;
+    return onPakChanged((e) => {
+      if (e.source === "PakIniEditor") return;
+      if (e.pakPath !== selectedPak.pak_path) return;
+      if (isDirty) {
+        showNotice("Pak changed elsewhere; reload manually to discard edits", "info", 6000);
+        return;
+      }
+      loadPak(selectedPak);
+    });
+  }, [selectedPak, isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function loadPak(pak: PakIniInfo) {
+    const isPakSwitch = selectedPak?.pak_path !== pak.pak_path;
     setSelectedPak(pak);
     setDpContent(null);
     setEngineContent(null);
@@ -308,10 +354,17 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
       setSavedDp(normDp);
       setEngineContent(normEng);
       setSavedEngine(normEng);
+      setPakEpoch((n) => n + 1);
 
-      // Auto-select the first available file
-      if (dp !== null) setActiveFile("device_profiles");
-      else if (eng !== null) setActiveFile("engine");
+      // Preserve user's active file across disk reloads; only auto-select when current choice is unavailable or switching paks.
+      if (isPakSwitch) {
+        if (dp !== null) setActiveFile("device_profiles");
+        else if (eng !== null) setActiveFile("engine");
+      } else if (activeFile === "device_profiles" && dp === null && eng !== null) {
+        setActiveFile("engine");
+      } else if (activeFile === "engine" && eng === null && dp !== null) {
+        setActiveFile("device_profiles");
+      }
     } catch (e) {
       showNotice(String(e), "err");
       console.error(e);
@@ -324,6 +377,19 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
     if (!selectedPak) return;
     await loadPak(selectedPak);
     showNotice("Reloaded from disk", "ok");
+  }
+
+  function discard() {
+    if (!isDirty) return;
+    const view = editorViewRef.current;
+    const target = activeFile === "device_profiles" ? savedDp : savedEngine;
+    if (view && target !== null) {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: target },
+      });
+    }
+    setDpContent(savedDp);
+    setEngineContent(savedEngine);
   }
 
   async function save() {
@@ -350,9 +416,11 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
         files,
       });
       showNotice(msg, "ok");
+      emitPakChanged({ pakPath: selectedPak.pak_path, source: "PakIniEditor" });
 
-      // Reload from repacked pak to verify round-trip
-      await loadPak(selectedPak);
+      // Sync saved snapshot to current buffer; skip disk round-trip to preserve cursor and active file.
+      if (dpContent !== null) setSavedDp(dpContent);
+      if (engineContent !== null) setSavedEngine(engineContent);
     } catch (e) {
       showNotice(String(e), "err", 8000);
       console.error(e);
@@ -531,9 +599,9 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
       view.destroy();
       editorViewRef.current = null;
     };
-    // Only recreate when switching files or loading new content from disk
+    // Only recreate when switching files or loading new content from disk (pakEpoch bump)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeFile, savedDp, savedEngine]);
+  }, [activeFile, pakEpoch]);
 
   // ── Sync search config + auto-jump (single atomic dispatch) ──
   useEffect(() => {
@@ -580,6 +648,18 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
       scan(true);
     }
   }, [isActive, gamePath, scan]);
+
+  // Re-scan when ~mods composition changes elsewhere; prunes deleted paks and adds new config mods.
+  const scanRef = useRef(scan);
+  scanRef.current = scan;
+  useEffect(() => {
+    return onModsChanged((event) => {
+      if (!gamePath) return;
+      const modsFolder = `${gamePath}\\MarvelGame\\Marvel\\Content\\Paks\\~mods`;
+      if (normalizeFolderPath(event.modsFolder) !== normalizeFolderPath(modsFolder)) return;
+      scanRef.current(true);
+    });
+  }, [gamePath]);
 
   // Auto-select when exactly one config mod is found
   useEffect(() => {
@@ -651,29 +731,31 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
           </SelectTrigger>
           <SelectContent position="popper" className="w-(--radix-select-trigger-width)">
             {paks.map((p) => (
-              <SelectItem
-                key={p.pak_path}
-                value={p.pak_path}
-                className="font-mono text-xs"
-                title={p.pak_name}
-              >
+              <SelectItem key={p.pak_path} value={p.pak_path} className="font-mono text-xs">
                 {p.pak_name}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
-        <Button variant="ghost" size="icon-sm" onClick={browse} title="Browse for pak file">
-          <FolderOpen size={14} />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => scan()}
-          disabled={scanning || !gamePath}
-          title="Scan for config mods"
-        >
-          <RefreshCw size={14} className={cn(scanning && "animate-spin")} />
-        </Button>
+        <Tip content="Browse for pak file">
+          <Button variant="ghost" size="icon-sm" onClick={browse}>
+            <FolderOpen size={14} />
+          </Button>
+        </Tip>
+        <Tip content="Scan for config mods">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => scan()}
+            disabled={scanning || !gamePath}
+          >
+            {scanning ? (
+              <RefreshCw size={14} className="animate-spin" />
+            ) : (
+              <ListRestart size={14} />
+            )}
+          </Button>
+        </Tip>
       </div>
 
       {/* ── Editor area ── */}
@@ -727,15 +809,21 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
             </div>
 
             <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => (searchOpen ? setSearchOpen(false) : openSearch())}
-                title="Search & Replace (Ctrl+F)"
-                className={cn(searchOpen && "bg-secondary")}
-              >
-                <Search size={13} />
-              </Button>
+              <Tip content="Reload from disk">
+                <Button variant="ghost" size="sm" onClick={reload} disabled={loading || saving}>
+                  <RefreshCw size={13} />
+                </Button>
+              </Tip>
+              <Tip content="Search & Replace (Ctrl+F)">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => (searchOpen ? setSearchOpen(false) : openSearch())}
+                  className={cn(searchOpen && "bg-secondary")}
+                >
+                  <Search size={13} />
+                </Button>
+              </Tip>
             </div>
           </div>
 
@@ -784,59 +872,61 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
                     : ""}
               </span>
               <div className="flex items-center gap-0.5">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setCaseSensitive((p) => !p)}
-                  title="Match Case"
-                  className={cn(caseSensitive && "bg-secondary text-foreground")}
-                >
-                  <CaseSensitive size={14} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={findPrev}
-                  disabled={matchPositions.length === 0}
-                  title="Previous Match"
-                >
-                  <ChevronUp size={13} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={findNext}
-                  disabled={matchPositions.length === 0}
-                  title="Next Match"
-                >
-                  <ChevronDown size={13} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={replaceOne}
-                  disabled={matchPositions.length === 0}
-                  title="Replace"
-                >
-                  <Replace size={13} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={replaceAllMatches}
-                  disabled={matchPositions.length === 0}
-                  title="Replace All"
-                >
-                  <ReplaceAll size={13} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setSearchOpen(false)}
-                  title="Close"
-                >
-                  <X size={13} />
-                </Button>
+                <Tip content="Match Case">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setCaseSensitive((p) => !p)}
+                    className={cn(caseSensitive && "bg-secondary text-foreground")}
+                  >
+                    <CaseSensitive size={14} />
+                  </Button>
+                </Tip>
+                <Tip content="Previous Match">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={findPrev}
+                    disabled={matchPositions.length === 0}
+                  >
+                    <ChevronUp size={13} />
+                  </Button>
+                </Tip>
+                <Tip content="Next Match">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={findNext}
+                    disabled={matchPositions.length === 0}
+                  >
+                    <ChevronDown size={13} />
+                  </Button>
+                </Tip>
+                <Tip content="Replace">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={replaceOne}
+                    disabled={matchPositions.length === 0}
+                  >
+                    <Replace size={13} />
+                  </Button>
+                </Tip>
+                <Tip content="Replace All">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={replaceAllMatches}
+                    disabled={matchPositions.length === 0}
+                  >
+                    <ReplaceAll size={13} />
+                  </Button>
+                </Tip>
+                <Tip content="Close">
+                  <Button variant="ghost" size="sm" onClick={() => setSearchOpen(false)}>
+                    <X size={13} />
+                  </Button>
+                </Tip>
               </div>
             </div>
           )}
@@ -844,26 +934,38 @@ export function PakIniEditor({ gamePath, isActive }: Props) {
           {/* CodeMirror editor */}
           <div ref={editorContainerRef} className="flex-1 min-h-0 w-full overflow-hidden" />
 
-          {/* Save bar — inside the editor border */}
+          {/* Save bar — only visible when there are pending edits */}
           {isDirty && (
             <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-1.5">
-              <span className="mr-auto flex items-center gap-1.5 text-[11px] font-medium text-warn">
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warn opacity-60" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-warn" />
+              {gameRunning ? (
+                <span className="mr-auto flex items-center gap-1.5 text-[11px] font-medium text-warn">
+                  <AlertTriangle size={13} className="shrink-0" />
+                  Close the game to save changes
                 </span>
-                Unsaved
-                {dpDirty && engineDirty
-                  ? " (both files)"
-                  : dpDirty
-                    ? " (DeviceProfiles)"
-                    : " (Engine)"}
-              </span>
-              <Button variant="ghost" size="sm" onClick={reload} disabled={saving}>
-                <RefreshCw size={13} />
-                Reload
+              ) : (
+                <span className="mr-auto flex items-center gap-1.5 text-[11px] font-medium text-warn">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warn opacity-60" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-warn" />
+                  </span>
+                  Unsaved
+                  {dpDirty && engineDirty
+                    ? " (both files)"
+                    : dpDirty
+                      ? " (DeviceProfiles)"
+                      : " (Engine)"}
+                </span>
+              )}
+              <Button variant="ghost" size="sm" onClick={discard} disabled={saving}>
+                <Undo2 size={13} />
+                Discard
               </Button>
-              <Button variant="blue" size="sm" onClick={save} disabled={!isDirty || saving}>
+              <Button
+                variant="blue"
+                size="sm"
+                onClick={save}
+                disabled={!isDirty || saving || gameRunning}
+              >
                 {saving ? <RefreshCw size={13} className="animate-spin" /> : <Save size={13} />}
                 {saving ? "Repacking..." : "Save"}
               </Button>

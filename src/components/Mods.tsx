@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -8,10 +9,14 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
   Archive,
+  Check,
   FolderOpen,
+  Layers,
   PackageOpen,
   Pencil,
+  Plus,
   RefreshCw,
+  RotateCcw,
   Shield,
   CheckCircle2,
   XCircle,
@@ -21,8 +26,11 @@ import {
   PowerOff,
   Copy,
   X,
+  Users,
+  Search,
 } from "lucide-react";
 
+import { HeroIcon } from "@/components/HeroIcon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,8 +50,39 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tip } from "@/components/ui/tooltip";
+import { emitModsChanged, normalizeFolderPath, onModsChanged } from "@/lib/modsEvents";
+import { useShowHeroIcons } from "@/lib/showHeroIcons";
 import { cn } from "@/lib/utils";
+
+interface HeroMatch {
+  character_id: number;
+  character_name: string;
+  skin_ids: number[];
+  skin_names: string[];
+}
+
+interface CharacterSummary {
+  id: number;
+  name: string;
+}
+
+interface SyncResult {
+  character_count: number;
+  generated_at: string | null;
+  fetched_at: number;
+  bytes: number;
+  source_url: string;
+}
 
 interface ModEntry {
   full_name: string;
@@ -52,6 +91,38 @@ interface ModEntry {
   has_companions: boolean;
   size_bytes: number;
   kind: "Pak" | "IoStore";
+  heroes: HeroMatch[];
+}
+
+interface AssetConflict {
+  asset: string;
+  mods: string[];
+}
+
+interface ConflictGroup {
+  mod_name: string;
+  display_name: string;
+  conflicts_with: string[];
+  conflicting_asset_count: number;
+}
+
+interface ConflictReport {
+  groups: ConflictGroup[];
+  asset_conflicts: AssetConflict[];
+  mods_scanned: number;
+}
+
+interface ModProfile {
+  name: string;
+  enabled_mods: string[];
+  created_at: number;
+  modified_at: number;
+}
+
+interface ProfileApplyResult {
+  successes: number;
+  failed: number;
+  missing: string[];
 }
 
 function formatBytes(bytes: number): string {
@@ -100,6 +171,7 @@ export function Mods({
     type: StatusType;
     revealPath?: string;
   } | null>(null);
+  const showHeroIcons = useShowHeroIcons();
   const [busyMods, setBusyMods] = useState<Set<string>>(new Set());
   const [isExporting, setIsExporting] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -108,6 +180,19 @@ export function Mods({
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [renamingMod, setRenamingMod] = useState<string | null>(null);
+  const [conflictReport, setConflictReport] = useState<ConflictReport | null>(null);
+  const [conflictDetailOpen, setConflictDetailOpen] = useState(false);
+  const [profiles, setProfiles] = useState<ModProfile[]>([]);
+  const [profilesOpen, setProfilesOpen] = useState(false);
+  const [knownHeroes, setKnownHeroes] = useState<CharacterSummary[]>([]);
+  const [heroFilter, setHeroFilter] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [newProfileName, setNewProfileName] = useState("");
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [lastAppliedProfile, setLastAppliedProfile] = useState<string | null>(null);
+  const [pendingDeleteProfile, setPendingDeleteProfile] = useState<string | null>(null);
+  const newProfileInputRef = useRef<HTMLInputElement>(null);
   const lastClickedIndex = useRef<number | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -137,12 +222,21 @@ export function Mods({
       try {
         const s = await invoke<ModsStatus>("get_mods_status", { gameRoot: gamePath });
         setModsStatus(s);
-        if (!silent) showNotice("Status refreshed", "ok", 4000);
+        if (!silent) showNotice("Mods refreshed", "ok", 4000);
         else if (s.conflicts_resolved > 0)
           showNotice(
             `Removed ${s.conflicts_resolved} outdated disabled mod${s.conflicts_resolved !== 1 ? "s" : ""} (replaced by enabled version)`,
             "info"
           );
+        // Check for asset-level conflicts between enabled mods.
+        const enabledMods = s.mod_entries.filter((m) => m.enabled);
+        if (enabledMods.length >= 2) {
+          invoke<ConflictReport>("check_mod_conflicts", { gameRoot: gamePath })
+            .then(setConflictReport)
+            .catch(() => setConflictReport(null));
+        } else {
+          setConflictReport(null);
+        }
       } catch (e: unknown) {
         showNotice(String(e), "err");
       }
@@ -151,9 +245,66 @@ export function Mods({
   );
   refreshRef.current = refresh;
 
+  const refreshProfiles = useCallback(async () => {
+    try {
+      const p = await invoke<ModProfile[]>("list_mod_profiles");
+      setProfiles(p);
+    } catch {
+      setProfiles([]);
+    }
+  }, []);
+
   useEffect(() => {
     if (gamePath) refresh(true);
-  }, [gamePath, refresh]);
+    refreshProfiles();
+  }, [gamePath, refresh, refreshProfiles]);
+
+  useEffect(() => {
+    return onModsChanged((event) => {
+      if (event.source === "Mods") return;
+      const folder = modsStatusRef.current?.mods_folder_path;
+      if (!folder) return;
+      if (normalizeFolderPath(event.modsFolder) !== normalizeFolderPath(folder)) return;
+      refreshRef.current?.(true);
+    });
+  }, []);
+
+  const emitChange = useCallback(() => {
+    const folder = modsStatusRef.current?.mods_folder_path;
+    if (folder) emitModsChanged({ modsFolder: folder, source: "Mods" });
+  }, []);
+
+  const loadKnownHeroes = useCallback(() => {
+    invoke<CharacterSummary[]>("list_known_heroes")
+      .then(setKnownHeroes)
+      .catch(() => setKnownHeroes([]));
+  }, []);
+
+  useEffect(() => {
+    loadKnownHeroes();
+  }, [loadKnownHeroes]);
+
+  const autoSyncFiredRef = useRef(false);
+  useEffect(() => {
+    if (autoSyncFiredRef.current) return;
+    autoSyncFiredRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const should = await invoke<boolean>("should_auto_sync_character_data");
+        if (!should || cancelled) return;
+        await invoke<SyncResult>("sync_character_data");
+        if (cancelled) return;
+        loadKnownHeroes();
+        await refreshRef.current?.(true);
+      } catch {
+        // Network or backend failure. Silent skip; manual button still available.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadKnownHeroes]);
 
   // Drop selected entries that no longer exist after a refresh.
   useEffect(() => {
@@ -236,6 +387,7 @@ export function Mods({
             if (errors.length > 0) showNotice(errors[0], "err");
             else if (installed > 0) {
               await refreshRef.current(true);
+              emitChange();
               const n = (c: number, s: string) => `${c} ${s}${c !== 1 ? "s" : ""}`;
               const parts: string[] = [];
               if (replacedEnabled > 0) parts.push(`updated ${n(replacedEnabled, "existing mod")}`);
@@ -264,6 +416,7 @@ export function Mods({
       const msg = await invoke<string>("install_signature_bypass", { gameRoot: gamePath });
       showNotice(msg, "ok", 4000);
       await refresh(true);
+      emitChange();
     } catch (e: unknown) {
       showNotice(String(e), "err");
     }
@@ -292,6 +445,7 @@ export function Mods({
         fullName: entry.full_name,
       });
       await refresh(true);
+      emitChange();
     } catch (e: unknown) {
       showNotice(String(e), "err");
     } finally {
@@ -313,6 +467,7 @@ export function Mods({
         enabled: !entry.enabled,
       });
       await refresh(true);
+      emitChange();
     } catch (e: unknown) {
       showNotice(String(e), "err");
     } finally {
@@ -378,6 +533,7 @@ export function Mods({
         enabled,
       });
       await refresh(true);
+      emitChange();
       const verb = enabled ? "Enabled" : "Disabled";
       if (res.failures.length === 0) {
         showNotice(`${verb} ${res.successes} mod${res.successes !== 1 ? "s" : ""}`, "ok");
@@ -416,6 +572,7 @@ export function Mods({
       });
       clearSelection();
       await refresh(true);
+      emitChange();
       if (res.failures.length === 0) {
         showNotice(`Deleted ${res.successes} mod${res.successes !== 1 ? "s" : ""}`, "ok");
       } else {
@@ -449,6 +606,7 @@ export function Mods({
         enabled: false,
       });
       await refresh(true);
+      emitChange();
       if (res.failures.length === 0) {
         showNotice(`Disabled ${res.successes} other mod${res.successes !== 1 ? "s" : ""}`, "ok");
       } else {
@@ -499,6 +657,7 @@ export function Mods({
       });
       setRenamingMod(null);
       await refresh(true);
+      emitChange();
     } catch (e: unknown) {
       showNotice(String(e), "err");
     } finally {
@@ -514,6 +673,78 @@ export function Mods({
     if (!modsStatus || !onViewInAssetManager) return;
     const sep = modsStatus.mods_folder_path.includes("\\") ? "\\" : "/";
     onViewInAssetManager(`${modsStatus.mods_folder_path}${sep}${entry.full_name}`);
+  }
+
+  // ── Profile actions ───────────────────────────────────────────────
+
+  async function saveProfile() {
+    const trimmed = newProfileName.trim();
+    if (!trimmed || !gamePath) return;
+    setSavingProfile(true);
+    try {
+      await invoke<ModProfile>("save_mod_profile", { name: trimmed, gameRoot: gamePath });
+      setNewProfileName("");
+      setLastAppliedProfile(trimmed);
+      await refreshProfiles();
+      showNotice(`Saved profile "${trimmed}"`, "ok", 4000);
+    } catch (e: unknown) {
+      showNotice(String(e), "err");
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
+  async function deleteProfile(name: string) {
+    try {
+      await invoke("delete_mod_profile", { name });
+      if (lastAppliedProfile === name) setLastAppliedProfile(null);
+      await refreshProfiles();
+      showNotice(`Deleted profile "${name}"`, "ok", 4000);
+    } catch (e: unknown) {
+      showNotice(String(e), "err");
+    } finally {
+      setPendingDeleteProfile(null);
+    }
+  }
+
+  async function overwriteProfile(name: string) {
+    if (!gamePath) return;
+    try {
+      await invoke<ModProfile>("overwrite_mod_profile", { name, gameRoot: gamePath });
+      setLastAppliedProfile(name);
+      await refreshProfiles();
+      showNotice(`Updated profile "${name}" with current mods`, "ok", 4000);
+    } catch (e: unknown) {
+      showNotice(String(e), "err");
+    }
+  }
+
+  async function applyProfile(name: string) {
+    if (!gamePath || profileBusy) return;
+    setPendingDeleteProfile(null);
+    setProfileBusy(true);
+    setProfilesOpen(false);
+    try {
+      const res = await invoke<ProfileApplyResult>("apply_mod_profile", {
+        name,
+        gameRoot: gamePath,
+      });
+      setLastAppliedProfile(name);
+      await refresh(true);
+      emitChange();
+      if (res.successes === 0 && res.failed === 0) {
+        showNotice(`Profile "${name}" already active`, "ok", 3000);
+      } else {
+        const parts: string[] = [`${res.successes} mod${res.successes !== 1 ? "s" : ""} updated`];
+        if (res.failed > 0) parts.push(`${res.failed} failed`);
+        if (res.missing.length > 0) parts.push(`${res.missing.length} missing`);
+        showNotice(`Profile "${name}" applied: ${parts.join(", ")}`, res.failed > 0 ? "err" : "ok");
+      }
+    } catch (e: unknown) {
+      showNotice(String(e), "err");
+    } finally {
+      setProfileBusy(false);
+    }
   }
 
   // Keyboard shortcuts: Delete, Ctrl/Cmd+A, Escape. Only when tab is active and
@@ -577,6 +808,100 @@ export function Mods({
   const enabledCount = modsStatus?.mod_entries.filter((m) => m.enabled).length ?? 0;
   const totalCount = modsStatus?.mod_entries.length ?? 0;
 
+  const filteredEntries = useMemo<ModEntry[]>(() => {
+    if (!modsStatus) return [];
+    let entries = modsStatus.mod_entries;
+    if (heroFilter === "unknown") {
+      entries = entries.filter((e) => e.heroes.length === 0);
+    } else if (heroFilter !== "all") {
+      const targetId = Number(heroFilter);
+      if (Number.isFinite(targetId)) {
+        entries = entries.filter((e) => e.heroes.some((h) => h.character_id === targetId));
+      }
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (q) entries = entries.filter((e) => e.display_name.toLowerCase().includes(q));
+    return entries;
+  }, [modsStatus, heroFilter, searchQuery]);
+  const filteredCount = filteredEntries.length;
+  const filtersActive = heroFilter !== "all" || searchQuery.trim().length > 0;
+
+  async function bulkRescanHeroes() {
+    if (!gamePath || selectedEntries.length === 0) return;
+    setBulkBusy(true);
+    let ok = 0;
+    let fail = 0;
+    try {
+      for (const entry of selectedEntries) {
+        try {
+          const heroes = await invoke<HeroMatch[]>("rescan_mod_heroes", {
+            gameRoot: gamePath,
+            fullName: entry.full_name,
+            displayName: entry.display_name,
+          });
+          setModsStatus((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              mod_entries: prev.mod_entries.map((e) =>
+                e.full_name === entry.full_name ? { ...e, heroes } : e
+              ),
+            };
+          });
+          ok += 1;
+        } catch {
+          fail += 1;
+        }
+      }
+      const msg =
+        fail === 0
+          ? `Rescanned ${ok} mod${ok === 1 ? "" : "s"}`
+          : `Rescanned ${ok}, ${fail} failed`;
+      showNotice(msg, fail === 0 ? "ok" : "err", 4000);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function bulkCopyPaths() {
+    if (!modsStatus || selectedEntries.length === 0) return;
+    const sep = modsStatus.mods_folder_path.includes("\\") ? "\\" : "/";
+    const paths = selectedEntries
+      .map((e) => `${modsStatus.mods_folder_path}${sep}${e.full_name}`)
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(paths);
+      showNotice(`Copied ${selectedEntries.length} paths`, "ok", 2000);
+    } catch (e: unknown) {
+      showNotice(String(e), "err");
+    }
+  }
+
+  async function rescanHeroes(entry: ModEntry) {
+    if (!gamePath) return;
+    try {
+      const heroes = await invoke<HeroMatch[]>("rescan_mod_heroes", {
+        gameRoot: gamePath,
+        fullName: entry.full_name,
+        displayName: entry.display_name,
+      });
+      setModsStatus((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          mod_entries: prev.mod_entries.map((e) =>
+            e.full_name === entry.full_name ? { ...e, heroes } : e
+          ),
+        };
+      });
+      const summary =
+        heroes.length === 0 ? "no heroes detected" : heroes.map((h) => h.character_name).join(", ");
+      showNotice(`Rescanned ${entry.display_name}: ${summary}`, "ok", 4000);
+    } catch (e: unknown) {
+      showNotice(String(e), "err");
+    }
+  }
+
   const selectedEntries = useMemo(() => {
     if (!modsStatus || selected.size === 0) return [] as ModEntry[];
     return modsStatus.mod_entries.filter((e) => selected.has(e.full_name));
@@ -585,6 +910,32 @@ export function Mods({
     selectedEntries.length > 0 && selectedEntries.every((e) => e.enabled);
   const allDisabledInSelection =
     selectedEntries.length > 0 && selectedEntries.every((e) => !e.enabled);
+  const conflictsByMod = useMemo(() => {
+    const map = new Map<string, ConflictGroup>();
+    if (!conflictReport) return map;
+    for (const g of conflictReport.groups) map.set(g.display_name, g);
+    return map;
+  }, [conflictReport]);
+
+  const conflictCount = conflictReport?.groups.length ?? 0;
+
+  const activeProfileName = useMemo(() => {
+    if (!modsStatus || profiles.length === 0) return null;
+    const currentEnabled = new Set(
+      modsStatus.mod_entries.filter((e) => e.enabled).map((e) => e.display_name)
+    );
+    const matches = profiles.filter(
+      (p) =>
+        p.enabled_mods.length === currentEnabled.size &&
+        p.enabled_mods.every((m) => currentEnabled.has(m))
+    );
+    if (matches.length === 0) return null;
+    if (lastAppliedProfile) {
+      return matches.some((p) => p.name === lastAppliedProfile) ? lastAppliedProfile : null;
+    }
+    return matches[0].name;
+  }, [modsStatus, profiles, lastAppliedProfile]);
+
   const selectAllState: boolean | "indeterminate" =
     totalCount > 0 && selected.size === totalCount
       ? true
@@ -604,26 +955,27 @@ export function Mods({
       <div className="flex min-h-8 items-center gap-3">
         <h2 className="shrink-0 text-xl font-bold">Mods</h2>
         {notice && (
-          <span
-            className={cn(
-              "flex min-w-0 items-center gap-1.5 truncate text-[12px] font-medium",
-              notice.type === "ok"
-                ? "text-ok"
-                : notice.type === "err"
-                  ? "text-err"
-                  : "text-muted-foreground",
-              notice.revealPath && "cursor-pointer hover:underline"
-            )}
-            onClick={notice.revealPath ? () => revealItemInDir(notice.revealPath!) : undefined}
-            title={notice.revealPath ? "Click to reveal in explorer" : undefined}
-          >
-            {notice.type === "ok" ? (
-              <CheckCircle2 className="shrink-0" size={14} strokeWidth={2.5} />
-            ) : notice.type === "err" ? (
-              <XCircle className="shrink-0" size={14} strokeWidth={2.5} />
-            ) : null}
-            <span className="truncate">{notice.msg}</span>
-          </span>
+          <Tip content="Click to reveal in explorer" disabled={!notice.revealPath}>
+            <span
+              className={cn(
+                "flex min-w-0 items-center gap-1.5 truncate text-[12px] font-medium",
+                notice.type === "ok"
+                  ? "text-ok"
+                  : notice.type === "err"
+                    ? "text-err"
+                    : "text-muted-foreground",
+                notice.revealPath && "cursor-pointer hover:underline"
+              )}
+              onClick={notice.revealPath ? () => revealItemInDir(notice.revealPath!) : undefined}
+            >
+              {notice.type === "ok" ? (
+                <CheckCircle2 className="shrink-0" size={14} strokeWidth={2.5} />
+              ) : notice.type === "err" ? (
+                <XCircle className="shrink-0" size={14} strokeWidth={2.5} />
+              ) : null}
+              <span className="truncate">{notice.msg}</span>
+            </span>
+          </Tip>
         )}
         {!gamePath && !pathLoading && (
           <span className="flex shrink-0 items-center gap-1.5 text-[12px] font-medium text-warn">
@@ -643,7 +995,6 @@ export function Mods({
         </div>
       )}
 
-      {/* Bypass banner — only if not installed */}
       {modsStatus && !modsStatus.sig_bypass_installed && (
         <div className="flex items-center gap-2.5 rounded-md border border-warn/20 bg-warn/5 px-3 py-2">
           <Shield size={15} className="shrink-0 text-warn" />
@@ -652,6 +1003,25 @@ export function Mods({
           </span>
           <Button variant="green" size="xs" onClick={installBypass} disabled={!gamePath}>
             Install Bypass
+          </Button>
+        </div>
+      )}
+
+      {/* Conflicts banner */}
+      {conflictCount > 0 && (
+        <div className="flex items-center gap-2.5 rounded-md border border-warn/20 bg-warn/5 px-3 py-2">
+          <AlertTriangle size={15} className="shrink-0 text-warn" />
+          <span className="flex-1 text-[12px] text-warn">
+            {conflictCount} mod{conflictCount !== 1 ? "s" : ""} ha
+            {conflictCount !== 1 ? "ve" : "s"} asset conflicts, the alphabetically first pak wins
+          </span>
+          <Button
+            variant="ghost"
+            size="xs"
+            className="text-warn hover:text-warn hover:bg-warn/10"
+            onClick={() => setConflictDetailOpen(true)}
+          >
+            View Details
           </Button>
         </div>
       )}
@@ -671,46 +1041,52 @@ export function Mods({
                 <span className="text-sm font-semibold">{selected.size} selected</span>
               </div>
               <div className="flex items-center gap-1 -mr-1">
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => bulkToggle(true)}
-                  disabled={bulkBusy || allEnabledInSelection || gameRunning}
-                  className="text-ok hover:text-ok hover:bg-ok/10"
-                  title={gameRunning ? "Close the game to modify mods" : "Enable selected mods"}
+                <Tip
+                  content={gameRunning ? "Close the game to modify mods" : "Enable selected mods"}
                 >
-                  <Power size={13} />
-                  Enable
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => bulkToggle(false)}
-                  disabled={bulkBusy || allDisabledInSelection || gameRunning}
-                  title={gameRunning ? "Close the game to modify mods" : "Disable selected mods"}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => bulkToggle(true)}
+                    disabled={bulkBusy || allEnabledInSelection || gameRunning}
+                    className="text-ok hover:text-ok hover:bg-ok/10"
+                  >
+                    <Power size={13} />
+                    Enable
+                  </Button>
+                </Tip>
+                <Tip
+                  content={gameRunning ? "Close the game to modify mods" : "Disable selected mods"}
                 >
-                  <PowerOff size={13} />
-                  Disable
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => setBulkDeleteOpen(true)}
-                  disabled={bulkBusy || gameRunning}
-                  className="text-err hover:text-err hover:bg-err/10"
-                  title={gameRunning ? "Close the game to modify mods" : "Delete selected mods"}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => bulkToggle(false)}
+                    disabled={bulkBusy || allDisabledInSelection || gameRunning}
+                  >
+                    <PowerOff size={13} />
+                    Disable
+                  </Button>
+                </Tip>
+                <Tip
+                  content={gameRunning ? "Close the game to modify mods" : "Delete selected mods"}
                 >
-                  <Trash2 size={13} />
-                  Delete
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={clearSelection}
-                  title="Clear selection (Esc)"
-                >
-                  <X size={15} />
-                </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setBulkDeleteOpen(true)}
+                    disabled={bulkBusy || gameRunning}
+                    className="text-err hover:text-err hover:bg-err/10"
+                  >
+                    <Trash2 size={13} />
+                    Delete
+                  </Button>
+                </Tip>
+                <Tip content="Clear selection (Esc)">
+                  <Button variant="ghost" size="icon-sm" onClick={clearSelection}>
+                    <X size={15} />
+                  </Button>
+                </Tip>
               </div>
             </>
           ) : (
@@ -725,27 +1101,65 @@ export function Mods({
                 )}
                 <h3 className="text-sm font-semibold">Installed Mods</h3>
                 {modsStatus && (
-                  <span className="text-[12px] text-muted-foreground">
-                    ({enabledCount}/{totalCount} active)
+                  <span className="inline-block w-28 shrink-0 text-[12px] tabular-nums text-muted-foreground">
+                    {filtersActive
+                      ? `(${filteredCount} of ${totalCount} shown)`
+                      : `(${enabledCount}/${totalCount} active)`}
                   </span>
+                )}
+                {modsStatus && totalCount > 0 && (
+                  <div className="ml-1 flex items-center gap-1.5 rounded-sm border border-border bg-background px-2 h-7 w-48 focus-within:ring-1 focus-within:ring-primary">
+                    <Search size={12} className="text-muted-foreground shrink-0" />
+                    <input
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search mods..."
+                      className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/50"
+                    />
+                    {searchQuery && (
+                      <Tip content="Clear search">
+                        <button
+                          type="button"
+                          onClick={() => setSearchQuery("")}
+                          className="shrink-0 text-muted-foreground hover:text-foreground"
+                        >
+                          <X size={12} />
+                        </button>
+                      </Tip>
+                    )}
+                  </div>
+                )}
+                {modsStatus && totalCount > 0 && (
+                  <Select value={heroFilter} onValueChange={setHeroFilter}>
+                    <Tip content="Filter mods by hero">
+                      <SelectTrigger size="sm" className="h-7! w-42.5 px-2 py-0 text-[12px]">
+                        <Users size={12} className="text-muted-foreground" />
+                        <SelectValue placeholder="All heroes" />
+                      </SelectTrigger>
+                    </Tip>
+                    <SelectContent className="max-h-72">
+                      <SelectItem value="all">All heroes</SelectItem>
+                      <SelectItem value="unknown">Unknown / no match</SelectItem>
+                      {knownHeroes.map((h) => (
+                        <SelectItem key={h.id} value={String(h.id)}>
+                          <span className="flex items-center gap-2">
+                            <HeroIcon characterId={h.id} name={h.name} size={16} />
+                            {h.name}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 )}
               </div>
               <div className="flex items-center -mr-1">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={openFolder}
-                  disabled={!gamePath}
-                  title="Open ~mods folder"
-                >
-                  <FolderOpen size={15} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={exportZip}
-                  disabled={enabledCount === 0 || isExporting}
-                  title={
+                <Tip content="Open ~mods folder">
+                  <Button variant="ghost" size="icon-sm" onClick={openFolder} disabled={!gamePath}>
+                    <FolderOpen size={15} />
+                  </Button>
+                </Tip>
+                <Tip
+                  content={
                     enabledCount === 0
                       ? "No enabled mods to export"
                       : isExporting
@@ -753,17 +1167,196 @@ export function Mods({
                         : "Export enabled mods as .zip or .7z"
                   }
                 >
-                  <Archive size={15} />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => refresh()}
-                  disabled={!gamePath}
-                  title="Refresh"
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={exportZip}
+                    disabled={enabledCount === 0 || isExporting}
+                  >
+                    <Archive size={15} />
+                  </Button>
+                </Tip>
+                <Popover
+                  open={profilesOpen}
+                  onOpenChange={(open) => {
+                    setProfilesOpen(open);
+                    if (!open) setPendingDeleteProfile(null);
+                  }}
                 >
-                  <RefreshCw size={15} />
-                </Button>
+                  <Tip content="Mod profiles">
+                    <PopoverTrigger asChild>
+                      <Button variant="ghost" size="icon-sm" disabled={!gamePath}>
+                        <Layers size={15} />
+                      </Button>
+                    </PopoverTrigger>
+                  </Tip>
+                  <PopoverContent
+                    align="end"
+                    className="w-72 p-0"
+                    onOpenAutoFocus={(e) => {
+                      e.preventDefault();
+                      if (!newProfileName.trim()) {
+                        newProfileInputRef.current?.focus();
+                      }
+                    }}
+                    onCloseAutoFocus={(e) => e.preventDefault()}
+                  >
+                    <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                      <span className="text-sm font-semibold">Profiles</span>
+                    </div>
+                    {profiles.length === 0 ? (
+                      <p className="px-3 py-4 text-center text-[12px] text-muted-foreground">
+                        No profiles yet. Save your current mod setup as a profile.
+                      </p>
+                    ) : (
+                      <ul className="max-h-52 overflow-y-auto">
+                        {profiles.map((p) => {
+                          const isActive = activeProfileName === p.name;
+                          const isDrifted = !isActive && lastAppliedProfile === p.name;
+                          return (
+                            <ContextMenu key={p.name}>
+                              <ContextMenuTrigger asChild>
+                                <li
+                                  onClick={() => {
+                                    if (pendingDeleteProfile === p.name) return;
+                                    applyProfile(p.name);
+                                  }}
+                                  className={cn(
+                                    "flex min-h-9 cursor-pointer items-center gap-1.5 border-b border-border/50 px-3 py-1.5 last:border-none transition-colors select-none",
+                                    isActive ? "bg-primary/10" : "hover:bg-secondary/40"
+                                  )}
+                                >
+                                  <span className="flex w-4 shrink-0 items-center justify-center">
+                                    {isActive ? (
+                                      <Check size={13} className="text-ok" />
+                                    ) : isDrifted ? (
+                                      <Tip content="Mods changed since this profile was applied">
+                                        <span
+                                          aria-label="Modified since applied"
+                                          className="size-1.5 rounded-full bg-warn"
+                                        />
+                                      </Tip>
+                                    ) : null}
+                                  </span>
+                                  <Tip content={p.name}>
+                                    <span
+                                      className={cn(
+                                        "min-w-0 flex-1 truncate text-[13px]",
+                                        isActive && "font-semibold"
+                                      )}
+                                    >
+                                      {p.name}
+                                    </span>
+                                  </Tip>
+                                  {pendingDeleteProfile === p.name ? (
+                                    <div
+                                      className="ml-1 flex shrink-0 items-center gap-1"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <span className="text-[11px] font-medium text-err">
+                                        Delete?
+                                      </span>
+                                      <Tip content="Confirm delete">
+                                        <button
+                                          onClick={() => deleteProfile(p.name)}
+                                          className="rounded bg-err px-1.5 text-[11px] font-semibold leading-5 text-white transition-opacity hover:opacity-90"
+                                        >
+                                          Yes
+                                        </button>
+                                      </Tip>
+                                      <Tip content="Cancel">
+                                        <button
+                                          onClick={() => setPendingDeleteProfile(null)}
+                                          className="rounded border border-border px-1.5 text-[11px] font-semibold leading-5 text-muted-foreground transition-colors hover:bg-secondary"
+                                        >
+                                          No
+                                        </button>
+                                      </Tip>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                                        {p.enabled_mods.length} mod
+                                        {p.enabled_mods.length !== 1 ? "s" : ""}
+                                      </span>
+                                      <div className="ml-1 flex items-center gap-0.5">
+                                        <Tip content="Overwrite with current mods">
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              overwriteProfile(p.name);
+                                            }}
+                                            className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                                          >
+                                            <RotateCcw size={13} />
+                                          </button>
+                                        </Tip>
+                                        <Tip content="Delete profile">
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setPendingDeleteProfile(p.name);
+                                            }}
+                                            className="shrink-0 rounded p-1 text-err/70 transition-colors hover:bg-err/10 hover:text-err"
+                                          >
+                                            <Trash2 size={13} />
+                                          </button>
+                                        </Tip>
+                                      </div>
+                                    </>
+                                  )}
+                                </li>
+                              </ContextMenuTrigger>
+                              <ContextMenuContent>
+                                <ContextMenuItem onSelect={() => overwriteProfile(p.name)}>
+                                  <RotateCcw />
+                                  Overwrite with current
+                                </ContextMenuItem>
+                                <ContextMenuSeparator />
+                                <ContextMenuItem destructive onSelect={() => deleteProfile(p.name)}>
+                                  <Trash2 />
+                                  Delete
+                                </ContextMenuItem>
+                              </ContextMenuContent>
+                            </ContextMenu>
+                          );
+                        })}
+                      </ul>
+                    )}
+                    <div className="flex items-center gap-1.5 border-t border-border px-3 py-2">
+                      <input
+                        ref={newProfileInputRef}
+                        value={newProfileName}
+                        onChange={(e) => setNewProfileName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveProfile();
+                        }}
+                        placeholder="New profile name…"
+                        className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/50"
+                      />
+                      <Tip content="Save current mods as profile">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={saveProfile}
+                          disabled={!newProfileName.trim() || savingProfile || !gamePath}
+                        >
+                          <Plus size={14} />
+                        </Button>
+                      </Tip>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+                <Tip content="Refresh">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => refresh()}
+                    disabled={!gamePath}
+                  >
+                    <RefreshCw size={15} />
+                  </Button>
+                </Tip>
               </div>
             </>
           )}
@@ -805,9 +1398,15 @@ export function Mods({
             </div>
           ) : (
             <ul ref={listRef}>
-              {modsStatus.mod_entries.map((entry, index) => {
+              {filteredEntries.length === 0 && filtersActive && (
+                <li className="flex h-12 items-center justify-center text-[12px] text-muted-foreground">
+                  No mods match the current filter.
+                </li>
+              )}
+              {filteredEntries.map((entry, index) => {
                 const busy = busyMods.has(entry.full_name);
                 const isSelected = selected.has(entry.full_name);
+                const isMulti = isSelected && selected.size > 1;
                 return (
                   <ContextMenu key={entry.full_name}>
                     <ContextMenuTrigger asChild>
@@ -820,7 +1419,7 @@ export function Mods({
                           }
                         }}
                         className={cn(
-                          "relative flex h-12 cursor-default items-center gap-3 border-b border-border/50 px-3 last:border-none select-none",
+                          "relative flex h-12 cursor-default items-center gap-3 border-b border-border/50 px-3 last:border-transparent select-none",
                           isSelected ? "bg-primary/10 hover:bg-primary/15" : "hover:bg-secondary/40"
                         )}
                       >
@@ -846,35 +1445,111 @@ export function Mods({
                             !entry.enabled && "opacity-40"
                           )}
                         >
-                          <span
-                            className="min-w-0 flex-1 truncate"
-                            onDoubleClick={(e) => {
-                              e.stopPropagation();
-                              if (
-                                !busy &&
-                                !bulkBusy &&
-                                !gameRunning &&
-                                renamingMod !== entry.full_name
-                              ) {
-                                setRenamingMod(entry.full_name);
-                              }
-                            }}
-                            title="Double-click to rename"
-                          >
-                            {renamingMod === entry.full_name ? (
-                              <RenameInput
-                                displayName={entry.display_name}
-                                onCommit={(v) => renameMod(entry, v)}
-                                onCancel={() => setRenamingMod(null)}
-                              />
-                            ) : (
-                              <ModName displayName={entry.display_name} />
-                            )}
-                          </span>
-                          {entry.kind === "IoStore" && (
-                            <span className="shrink-0 rounded bg-ok/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
-                              IoStore
+                          <Tip content="Double-click to rename" side="top" align="start">
+                            <span
+                              className="min-w-0 flex-1 truncate"
+                              onDoubleClick={(e) => {
+                                e.stopPropagation();
+                                if (
+                                  !busy &&
+                                  !bulkBusy &&
+                                  !gameRunning &&
+                                  renamingMod !== entry.full_name
+                                ) {
+                                  setRenamingMod(entry.full_name);
+                                }
+                              }}
+                            >
+                              {renamingMod === entry.full_name ? (
+                                <RenameInput
+                                  displayName={entry.display_name}
+                                  onCommit={(v) => renameMod(entry, v)}
+                                  onCancel={() => setRenamingMod(null)}
+                                />
+                              ) : (
+                                <ModName displayName={entry.display_name} />
+                              )}
                             </span>
+                          </Tip>
+                          {entry.heroes.length === 1 && (
+                            <Tip
+                              content={
+                                entry.heroes[0].skin_names.length > 0
+                                  ? `${entry.heroes[0].character_name}: ${entry.heroes[0].skin_names.join(", ")}`
+                                  : entry.heroes[0].character_name
+                              }
+                            >
+                              <span
+                                className={cn(
+                                  "flex shrink-0 items-center gap-1.5 rounded-full bg-secondary/80 py-0.5 pr-2 text-[12px] text-foreground",
+                                  showHeroIcons ? "pl-0.5" : "pl-2"
+                                )}
+                              >
+                                {showHeroIcons && (
+                                  <HeroIcon
+                                    characterId={entry.heroes[0].character_id}
+                                    name={entry.heroes[0].character_name}
+                                    size={22}
+                                    tooltip=""
+                                  />
+                                )}
+                                <span className="max-w-32 truncate">
+                                  {entry.heroes[0].character_name}
+                                </span>
+                              </span>
+                            </Tip>
+                          )}
+                          {entry.heroes.length > 1 && !showHeroIcons && (
+                            <Tip content={entry.heroes.map((h) => h.character_name).join(", ")}>
+                              <span className="flex shrink-0 items-center rounded-full bg-secondary/80 px-2 py-0.5 text-[12px] text-foreground">
+                                <span className="max-w-32 truncate">
+                                  {entry.heroes[0].character_name}
+                                </span>
+                                <span className="ml-1 text-muted-foreground">
+                                  +{entry.heroes.length - 1}
+                                </span>
+                              </span>
+                            </Tip>
+                          )}
+                          {entry.heroes.length > 1 && showHeroIcons && (
+                            <span className="flex shrink-0 items-center gap-1 rounded-full bg-secondary/80 px-1.5 py-0.5">
+                              <span className="flex items-center gap-1">
+                                {entry.heroes.slice(0, 4).map((h) => (
+                                  <HeroIcon
+                                    key={h.character_id}
+                                    characterId={h.character_id}
+                                    name={h.character_name}
+                                    size={22}
+                                    tooltip={
+                                      h.skin_names.length > 0
+                                        ? `${h.character_name}: ${h.skin_names.join(", ")}`
+                                        : h.character_name
+                                    }
+                                  />
+                                ))}
+                              </span>
+                              {entry.heroes.length > 4 && (
+                                <Tip
+                                  content={entry.heroes
+                                    .slice(4)
+                                    .map((h) => h.character_name)
+                                    .join(", ")}
+                                >
+                                  <span className="flex h-5.5 min-w-5.5 shrink-0 items-center justify-center rounded-full bg-secondary/40 px-1 text-[11px] font-semibold leading-none text-foreground ring-1 ring-border/50">
+                                    +{entry.heroes.length - 4}
+                                  </span>
+                                </Tip>
+                              )}
+                            </span>
+                          )}
+                          {conflictsByMod.has(entry.display_name) && (
+                            <Tip
+                              content={`Conflicts with: ${conflictsByMod.get(entry.display_name)!.conflicts_with.join(", ")}`}
+                            >
+                              <span className="shrink-0 rounded bg-warn/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-warn">
+                                Conflict
+                              </span>
+                            </Tip>
                           )}
                           <span className="shrink-0 w-12 text-right font-mono text-[11px] text-muted-foreground/60 tabular-nums">
                             {formatBytes(entry.size_bytes)}
@@ -886,21 +1561,23 @@ export function Mods({
                             onClick={(e) => e.stopPropagation()}
                           >
                             <span className="text-[11px] font-medium text-err">Delete?</span>
-                            <button
-                              title="Confirm delete"
-                              disabled={busy}
-                              onClick={() => deleteMod(entry)}
-                              className="rounded px-1.5 text-[11px] font-semibold bg-err text-white hover:opacity-90 transition-opacity leading-5.5"
-                            >
-                              Yes
-                            </button>
-                            <button
-                              title="Cancel"
-                              onClick={() => setPendingDelete(null)}
-                              className="rounded px-1.5 text-[11px] font-semibold border border-border text-muted-foreground hover:bg-secondary transition-colors leading-5.5"
-                            >
-                              No
-                            </button>
+                            <Tip content="Confirm delete">
+                              <button
+                                disabled={busy}
+                                onClick={() => deleteMod(entry)}
+                                className="rounded px-1.5 text-[11px] font-semibold bg-err text-white hover:opacity-90 transition-opacity leading-5.5"
+                              >
+                                Yes
+                              </button>
+                            </Tip>
+                            <Tip content="Cancel">
+                              <button
+                                onClick={() => setPendingDelete(null)}
+                                className="rounded px-1.5 text-[11px] font-semibold border border-border text-muted-foreground hover:bg-secondary transition-colors leading-5.5"
+                              >
+                                No
+                              </button>
+                            </Tip>
                           </div>
                         ) : (
                           <>
@@ -911,65 +1588,102 @@ export function Mods({
                               onCheckedChange={() => toggleMod(entry)}
                               className="shrink-0"
                             />
-                            <button
-                              title={gameRunning ? "Close the game to modify mods" : "Delete mod"}
-                              disabled={busy || gameRunning}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteMod(entry);
-                              }}
-                              className="shrink-0 rounded p-1 text-err/70 transition-colors hover:text-err hover:bg-err/10 disabled:opacity-40 disabled:hover:bg-transparent"
+                            <Tip
+                              content={gameRunning ? "Close the game to modify mods" : "Delete mod"}
                             >
-                              <Trash2 size={13} />
-                            </button>
+                              <button
+                                disabled={busy || gameRunning}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteMod(entry);
+                                }}
+                                className="shrink-0 rounded p-1 text-err/70 transition-colors hover:text-err hover:bg-err/10 disabled:opacity-40 disabled:hover:bg-transparent"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </Tip>
                           </>
                         )}
                       </li>
                     </ContextMenuTrigger>
                     <ContextMenuContent>
-                      <ContextMenuItem
-                        disabled={busy || bulkBusy || gameRunning}
-                        onSelect={() => toggleMod(entry)}
-                      >
-                        {entry.enabled ? <PowerOff /> : <Power />}
-                        {entry.enabled ? "Disable" : "Enable"}
-                      </ContextMenuItem>
-                      <ContextMenuItem
-                        disabled={busy || bulkBusy || gameRunning}
-                        onSelect={() => disableAllOthers(entry)}
-                      >
-                        <PowerOff />
-                        Disable all others
-                      </ContextMenuItem>
-                      <ContextMenuSeparator />
-                      <ContextMenuItem
-                        disabled={busy || bulkBusy || gameRunning}
-                        onSelect={() => setRenamingMod(entry.full_name)}
-                      >
-                        <Pencil />
-                        Rename
-                      </ContextMenuItem>
-                      <ContextMenuItem
-                        disabled={!entry.enabled}
-                        onSelect={() => viewInAssetManager(entry)}
-                      >
-                        <PackageOpen />
-                        View in Asset Manager
-                      </ContextMenuItem>
-                      <ContextMenuItem onSelect={() => revealMod(entry)}>
-                        <FolderOpen />
-                        Show in folder
-                      </ContextMenuItem>
-                      <ContextMenuItem onSelect={() => copyPath(entry)}>
-                        <Copy />
-                        Copy path
-                      </ContextMenuItem>
+                      {isMulti ? (
+                        <>
+                          <ContextMenuItem
+                            disabled={bulkBusy || allEnabledInSelection || gameRunning}
+                            onSelect={() => bulkToggle(true)}
+                          >
+                            <Power />
+                            Enable {selected.size} selected
+                          </ContextMenuItem>
+                          <ContextMenuItem
+                            disabled={bulkBusy || allDisabledInSelection || gameRunning}
+                            onSelect={() => bulkToggle(false)}
+                          >
+                            <PowerOff />
+                            Disable {selected.size} selected
+                          </ContextMenuItem>
+                          <ContextMenuSeparator />
+                          <ContextMenuItem onSelect={bulkCopyPaths}>
+                            <Copy />
+                            Copy {selected.size} paths
+                          </ContextMenuItem>
+                          <ContextMenuItem disabled={bulkBusy} onSelect={bulkRescanHeroes}>
+                            <RefreshCw />
+                            Rescan heroes for {selected.size} mods
+                          </ContextMenuItem>
+                        </>
+                      ) : (
+                        <>
+                          <ContextMenuItem
+                            disabled={busy || bulkBusy || gameRunning}
+                            onSelect={() => toggleMod(entry)}
+                          >
+                            {entry.enabled ? <PowerOff /> : <Power />}
+                            {entry.enabled ? "Disable" : "Enable"}
+                          </ContextMenuItem>
+                          <ContextMenuItem
+                            disabled={busy || bulkBusy || gameRunning}
+                            onSelect={() => disableAllOthers(entry)}
+                          >
+                            <PowerOff />
+                            Disable all others
+                          </ContextMenuItem>
+                          <ContextMenuSeparator />
+                          <ContextMenuItem
+                            disabled={busy || bulkBusy || gameRunning}
+                            onSelect={() => setRenamingMod(entry.full_name)}
+                          >
+                            <Pencil />
+                            Rename
+                          </ContextMenuItem>
+                          <ContextMenuItem
+                            disabled={!entry.enabled}
+                            onSelect={() => viewInAssetManager(entry)}
+                          >
+                            <PackageOpen />
+                            View in Asset Manager
+                          </ContextMenuItem>
+                          <ContextMenuItem onSelect={() => revealMod(entry)}>
+                            <FolderOpen />
+                            Show in folder
+                          </ContextMenuItem>
+                          <ContextMenuItem onSelect={() => copyPath(entry)}>
+                            <Copy />
+                            Copy path
+                          </ContextMenuItem>
+                          <ContextMenuItem onSelect={() => rescanHeroes(entry)}>
+                            <RefreshCw />
+                            Rescan heroes
+                          </ContextMenuItem>
+                        </>
+                      )}
                       <ContextMenuSeparator />
                       <ContextMenuItem
                         destructive
                         disabled={busy || bulkBusy || gameRunning}
                         onSelect={() => {
-                          if (selected.size > 1 && selected.has(entry.full_name)) {
+                          if (isMulti) {
                             setBulkDeleteOpen(true);
                           } else {
                             setPendingDelete(entry.full_name);
@@ -977,7 +1691,7 @@ export function Mods({
                         }}
                       >
                         <Trash2 />
-                        Delete
+                        {isMulti ? `Delete ${selected.size} selected` : "Delete"}
                       </ContextMenuItem>
                     </ContextMenuContent>
                   </ContextMenu>
@@ -1005,8 +1719,25 @@ export function Mods({
               className={cn("bg-err text-white hover:bg-err/90 focus-visible:ring-err/40")}
               onClick={bulkDelete}
             >
-              Delete {selected.size}
+              Delete
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={conflictDetailOpen} onOpenChange={setConflictDetailOpen}>
+        <AlertDialogContent className="max-w-lg max-h-[80vh] flex flex-col">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Mod Asset Conflicts</AlertDialogTitle>
+            <AlertDialogDescription>
+              {conflictReport?.asset_conflicts.length ?? 0} asset
+              {conflictReport?.asset_conflicts.length !== 1 ? "s" : ""} modified by multiple mods.
+              The alphabetically first pak file wins.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ConflictList conflicts={conflictReport?.asset_conflicts ?? []} />
+          <AlertDialogFooter>
+            <AlertDialogCancel>Close</AlertDialogCancel>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1036,9 +1767,13 @@ function RenameInput({
   onCommit: (value: string) => void;
   onCancel: () => void;
 }) {
-  // Split into editable base and preserved suffix (_NNNNN_P)
-  const match = displayName.match(/^(.+?)(_\d+_P)?\.pak$/);
-  const base = match ? match[1] : displayName;
+  // Peel the parent subdirectory off; it stays fixed, only the filename is editable.
+  const slashIdx = displayName.lastIndexOf("/");
+  const parentPrefix = slashIdx >= 0 ? displayName.slice(0, slashIdx + 1) : "";
+  const leaf = slashIdx >= 0 ? displayName.slice(slashIdx + 1) : displayName;
+  // Split leaf into editable base and preserved suffix (_NNNNN_P).
+  const match = leaf.match(/^(.+?)(_\d+_P)?\.pak$/);
+  const base = match ? match[1] : leaf;
   const suffix = match?.[2] ?? "";
   const ref = useRef<HTMLInputElement>(null);
   const committed = useRef(false);
@@ -1059,6 +1794,11 @@ function RenameInput({
 
   return (
     <span className="flex items-center gap-0 rounded border border-primary bg-background focus-within:ring-1 focus-within:ring-primary">
+      {parentPrefix && (
+        <span className="shrink-0 pl-1.5 font-mono text-[13px] text-muted-foreground/60">
+          {parentPrefix}
+        </span>
+      )}
       <input
         ref={ref}
         defaultValue={base}
@@ -1088,5 +1828,66 @@ function Code({ children }: { children: React.ReactNode }) {
     <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">
       {children}
     </code>
+  );
+}
+
+function ConflictList({ conflicts }: { conflicts: AssetConflict[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // TanStack Virtual returns unstable functions by design; this hook is safe here.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: conflicts.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 72,
+    overscan: 5,
+    measureElement: (el) => el.getBoundingClientRect().height,
+  });
+
+  return (
+    <div ref={scrollRef} className="flex-1 overflow-y-auto -mx-6 px-6">
+      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
+        {virtualizer.getVirtualItems().map((vRow) => {
+          const c = conflicts[vRow.index];
+          return (
+            <div
+              key={vRow.index}
+              data-index={vRow.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${vRow.start}px)`,
+              }}
+              className="pb-3"
+            >
+              <div className="rounded border border-border bg-secondary/30 p-2.5 text-[12px]">
+                <Tip content={c.asset}>
+                  <p className="truncate font-mono text-[11px] text-muted-foreground">{c.asset}</p>
+                </Tip>
+                <div className="mt-1.5 flex flex-col gap-0.5">
+                  {c.mods.map((mod, i) => (
+                    <span key={mod} className="flex items-center gap-1.5">
+                      <span className="truncate">{mod}</span>
+                      {i === 0 && (
+                        <span className="shrink-0 rounded bg-ok/15 px-1 py-0.5 text-[9px] font-semibold uppercase leading-none text-ok">
+                          Active
+                        </span>
+                      )}
+                      {i > 0 && (
+                        <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] font-semibold uppercase leading-none text-muted-foreground">
+                          Overridden
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

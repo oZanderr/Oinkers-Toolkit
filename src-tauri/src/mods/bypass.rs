@@ -1,8 +1,32 @@
+//! Installs and removes the signature bypass files that allow unsigned pak mods to load.
+
 use std::fs;
+use std::path::PathBuf;
 
 use crate::paths::{binaries_dir, mods_dir};
 
 use super::{BYPASS_ASI, BYPASS_DSOUND, file_matches};
+
+struct BypassPaths {
+    dsound: PathBuf,
+    asi: PathBuf,
+}
+
+fn bypass_paths(game_root: &str) -> BypassPaths {
+    let bin_dir = binaries_dir(game_root);
+    BypassPaths {
+        dsound: bin_dir.join("dsound.dll"),
+        asi: bin_dir
+            .join("plugins")
+            .join("MarvelRivalsUTOCSignatureBypass.asi"),
+    }
+}
+
+/// dsound.dll is a generic ASI loader; only the .asi payload must byte-match.
+pub(crate) fn is_signature_bypass_installed(game_root: &str) -> bool {
+    let paths = bypass_paths(game_root);
+    paths.dsound.exists() && file_matches(&paths.asi, BYPASS_ASI)
+}
 
 pub(crate) fn install_signature_bypass(game_root: &str) -> Result<String, String> {
     // Validate that the bundled DLL is a real PE binary (MZ header), not a placeholder.
@@ -21,12 +45,10 @@ pub(crate) fn install_signature_bypass(game_root: &str) -> Result<String, String
         ));
     }
 
-    let dsound_path = bin_dir.join("dsound.dll");
-    let plugins_dir = bin_dir.join("plugins");
-    let asi_path = plugins_dir.join("MarvelRivalsUTOCSignatureBypass.asi");
-
-    let dsound_ok = file_matches(&dsound_path, BYPASS_DSOUND);
-    let asi_ok = file_matches(&asi_path, BYPASS_ASI);
+    let paths = bypass_paths(game_root);
+    // Don't overwrite a user-supplied loader; any dsound.dll counts as present.
+    let dsound_ok = paths.dsound.exists();
+    let asi_ok = file_matches(&paths.asi, BYPASS_ASI);
     let mods_ok = mods_dir(game_root).exists();
 
     if dsound_ok && asi_ok && mods_ok {
@@ -34,12 +56,14 @@ pub(crate) fn install_signature_bypass(game_root: &str) -> Result<String, String
     }
 
     if !dsound_ok {
-        fs::write(&dsound_path, BYPASS_DSOUND).map_err(|e| e.to_string())?;
+        fs::write(&paths.dsound, BYPASS_DSOUND).map_err(|e| e.to_string())?;
     }
 
     if !asi_ok {
-        fs::create_dir_all(&plugins_dir).map_err(|e| e.to_string())?;
-        fs::write(&asi_path, BYPASS_ASI).map_err(|e| e.to_string())?;
+        if let Some(plugins_dir) = paths.asi.parent() {
+            fs::create_dir_all(plugins_dir).map_err(|e| e.to_string())?;
+        }
+        fs::write(&paths.asi, BYPASS_ASI).map_err(|e| e.to_string())?;
     }
 
     if !mods_ok {
@@ -50,14 +74,10 @@ pub(crate) fn install_signature_bypass(game_root: &str) -> Result<String, String
 }
 
 pub(crate) fn remove_signature_bypass(game_root: &str) -> Result<String, String> {
-    let bin_dir = binaries_dir(game_root);
-    let dsound_path = bin_dir.join("dsound.dll");
-    let asi_path = bin_dir
-        .join("plugins")
-        .join("MarvelRivalsUTOCSignatureBypass.asi");
+    let paths = bypass_paths(game_root);
 
     let mut removed = 0usize;
-    for path in &[&dsound_path, &asi_path] {
+    for path in &[&paths.dsound, &paths.asi] {
         if path.exists() {
             fs::remove_file(path).map_err(|e| e.to_string())?;
             removed += 1;

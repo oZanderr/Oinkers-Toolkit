@@ -2,6 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, X } from "lucide-react";
 
 import icon from "@/assets/icon.png";
+import { Tip } from "@/components/ui/tooltip";
 
 const appWindow = getCurrentWindow();
 
@@ -32,27 +33,30 @@ export function Titlebar() {
           Marvel Rivals Modding Suite
         </span>
       </div>
-      <button
-        onClick={() => appWindow.minimize()}
-        className="inline-flex h-8.75 w-8.75 items-center justify-center text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-        title="Minimize"
-      >
-        <Minus size={14} strokeWidth={2} />
-      </button>
-      <button
-        onClick={() => appWindow.toggleMaximize()}
-        className="inline-flex h-8.75 w-8.75 items-center justify-center text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-        title="Maximize"
-      >
-        <Square size={11} strokeWidth={2} />
-      </button>
-      <button
-        onClick={() => appWindow.close()}
-        className="inline-flex h-8.75 w-8.75 items-center justify-center rounded-tr text-muted-foreground transition-colors hover:bg-red-600 hover:text-white"
-        title="Close"
-      >
-        <X size={14} strokeWidth={2} />
-      </button>
+      <Tip content="Minimize">
+        <button
+          onClick={() => appWindow.minimize()}
+          className="inline-flex h-8.75 w-8.75 items-center justify-center text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        >
+          <Minus size={14} strokeWidth={2} />
+        </button>
+      </Tip>
+      <Tip content="Maximize">
+        <button
+          onClick={() => appWindow.toggleMaximize()}
+          className="inline-flex h-8.75 w-8.75 items-center justify-center text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        >
+          <Square size={11} strokeWidth={2} />
+        </button>
+      </Tip>
+      <Tip content="Close">
+        <button
+          onClick={() => appWindow.close()}
+          className="inline-flex h-8.75 w-8.75 items-center justify-center rounded-tr text-muted-foreground transition-colors hover:bg-red-600 hover:text-white"
+        >
+          <X size={14} strokeWidth={2} />
+        </button>
+      </Tip>
     </div>
   );
 }
