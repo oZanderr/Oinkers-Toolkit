@@ -1,6 +1,6 @@
 {
   "source": "https://raw.githubusercontent.com/donutman07/MarvelRivalsCharacterIDs/main/MarvelRivalsCharacterIDs.md",
-  "generated_at": "2026-05-03T08:02:56.945Z",
+  "generated_at": "2026-05-08T07:49:32.877Z",
   "characters": {
     "1011": {
       "name": "Hulk",
@@ -349,6 +349,7 @@
         "1035305": "Frosted Agony",
         "1035500": "LINGERING IMPRINT",
         "1035501": "Space Knight",
+        "1035502": "WAR OF THE REALMS",
         "1035800": "MARVEL COSMIC INVASION"
       }
     },
@@ -450,9 +451,12 @@
       "skins": {
         "1041001": "Default",
         "1041100": "Navy Trooper",
+        "1041102": "RUBY RANGER",
+        "1041103": "TAWNY TRACKER",
         "1041300": "Blood Soldier",
         "1041301": "Polarity Knight",
         "1041302": "Winter's Wrath",
+        "1041304": "STARLIT GUNSLINGER",
         "1041500": "Revolution",
         "1041501": "Winter's Veil",
         "1041502": "WINTER BUCKAROO",
