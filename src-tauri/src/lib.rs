@@ -21,10 +21,12 @@ mod update_check;
 #[allow(clippy::expect_used)]
 pub fn run() {
     concurrency::init_global_pool();
+    let loaded_settings = settings::Settings::load();
+    game_status::set_check_enabled(loaded_settings.game_running_check_enabled);
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage::<settings::SettingsState>(std::sync::Mutex::new(settings::Settings::load()))
+        .manage::<settings::SettingsState>(std::sync::Mutex::new(loaded_settings))
         .manage::<mods::hero_cache::HeroCacheState>(std::sync::Mutex::new(
             mods::hero_cache::HeroCache::load(),
         ))
@@ -51,6 +53,8 @@ pub fn run() {
             settings::set_mod_compression_level,
             settings::get_vanilla_compression_level,
             settings::set_vanilla_compression_level,
+            settings::get_game_running_check_enabled,
+            settings::set_game_running_check_enabled,
             // update_check
             update_check::check_for_update,
             update_check::get_auto_check_updates,

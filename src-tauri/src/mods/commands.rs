@@ -39,11 +39,17 @@ pub(crate) async fn check_mod_conflicts(
 
 #[tauri::command]
 pub(crate) fn install_signature_bypass(game_root: String) -> Result<String, String> {
+    if crate::game_status::should_block_for_game() {
+        return Err(crate::game_status::game_running_error());
+    }
     mods::install_signature_bypass(&game_root)
 }
 
 #[tauri::command]
 pub(crate) fn remove_signature_bypass(game_root: String) -> Result<String, String> {
+    if crate::game_status::should_block_for_game() {
+        return Err(crate::game_status::game_running_error());
+    }
     mods::remove_signature_bypass(&game_root)
 }
 
@@ -63,7 +69,7 @@ pub(crate) fn toggle_mod_enabled(
     full_name: String,
     enabled: bool,
 ) -> Result<(), String> {
-    if game_status::is_game_running() {
+    if game_status::should_block_for_game() {
         return Err(game_status::game_running_error());
     }
     mods::toggle_mod_enabled(&mods_folder, &full_name, enabled)
@@ -89,7 +95,7 @@ pub(crate) fn rename_mod(
     full_name: String,
     new_base: String,
 ) -> Result<String, String> {
-    if game_status::is_game_running() {
+    if game_status::should_block_for_game() {
         return Err(game_status::game_running_error());
     }
     mods::rename_mod(&mods_folder, &full_name, &new_base)
@@ -97,7 +103,7 @@ pub(crate) fn rename_mod(
 
 #[tauri::command]
 pub(crate) fn delete_mod(mods_folder: String, full_name: String) -> Result<(), String> {
-    if game_status::is_game_running() {
+    if game_status::should_block_for_game() {
         return Err(game_status::game_running_error());
     }
     mods::delete_mod(&mods_folder, &full_name)
@@ -109,7 +115,7 @@ pub(crate) fn toggle_mods_enabled(
     full_names: Vec<String>,
     enabled: bool,
 ) -> Result<BulkOpResult, String> {
-    if game_status::is_game_running() {
+    if game_status::should_block_for_game() {
         return Err(game_status::game_running_error());
     }
     Ok(mods::toggle_mods_enabled(
@@ -124,7 +130,7 @@ pub(crate) fn delete_mods(
     mods_folder: String,
     full_names: Vec<String>,
 ) -> Result<BulkOpResult, String> {
-    if game_status::is_game_running() {
+    if game_status::should_block_for_game() {
         return Err(game_status::game_running_error());
     }
     Ok(mods::delete_mods(&mods_folder, &full_names))
@@ -135,7 +141,7 @@ pub(crate) fn install_mod(
     mods_folder: String,
     source_path: String,
 ) -> Result<InstallResult, String> {
-    if game_status::is_game_running() {
+    if game_status::should_block_for_game() {
         return Err(game_status::game_running_error());
     }
     mods::install_mod(&mods_folder, &source_path)
@@ -146,7 +152,7 @@ pub(crate) async fn install_from_archive(
     mods_folder: String,
     archive_path: String,
 ) -> Result<Vec<InstallResult>, String> {
-    if game_status::is_game_running() {
+    if game_status::should_block_for_game() {
         return Err(game_status::game_running_error());
     }
     tauri::async_runtime::spawn_blocking(move || {

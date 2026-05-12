@@ -37,6 +37,9 @@ pub(crate) async fn apply_pak_tweak_edits(
     pak_path: String,
     edits: Vec<PakTweakEdit>,
 ) -> Result<String, String> {
+    if crate::game_status::should_block_for_game() {
+        return Err(crate::game_status::game_running_error());
+    }
     tauri::async_runtime::spawn_blocking(move || pak_tweaks::apply_pak_tweaks(&pak_path, &edits))
         .await
         .map_err(|e| e.to_string())?
@@ -54,6 +57,9 @@ pub(crate) async fn save_pak_ini(
     pak_path: String,
     files: Vec<PakIniFileContent>,
 ) -> Result<String, String> {
+    if crate::game_status::should_block_for_game() {
+        return Err(crate::game_status::game_running_error());
+    }
     tauri::async_runtime::spawn_blocking(move || pak_tweaks::save_pak_ini(&pak_path, files))
         .await
         .map_err(|e| e.to_string())?

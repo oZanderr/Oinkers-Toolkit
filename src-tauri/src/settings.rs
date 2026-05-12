@@ -90,6 +90,8 @@ pub(crate) struct Settings {
     pub(crate) mod_compression_level: CompressionLevelSetting,
     #[serde(default = "default_vanilla_compression_level")]
     pub(crate) vanilla_compression_level: CompressionLevelSetting,
+    #[serde(default = "default_true")]
+    pub(crate) game_running_check_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -109,6 +111,7 @@ impl Default for Settings {
             tweak_profiles: Vec::new(),
             mod_compression_level: default_mod_compression_level(),
             vanilla_compression_level: default_vanilla_compression_level(),
+            game_running_check_enabled: true,
         }
     }
 }
@@ -261,4 +264,26 @@ pub(crate) fn set_vanilla_compression_level(
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     guard.vanilla_compression_level = level;
     guard.save()
+}
+
+#[tauri::command]
+pub(crate) fn get_game_running_check_enabled(state: State<'_, SettingsState>) -> bool {
+    state
+        .lock()
+        .map(|s| s.game_running_check_enabled)
+        .unwrap_or(true)
+}
+
+#[tauri::command]
+pub(crate) fn set_game_running_check_enabled(
+    state: State<'_, SettingsState>,
+    enabled: bool,
+) -> Result<(), String> {
+    {
+        let mut guard = state.lock().map_err(|e| e.to_string())?;
+        guard.game_running_check_enabled = enabled;
+        guard.save()?;
+    }
+    crate::game_status::set_check_enabled(enabled);
+    Ok(())
 }

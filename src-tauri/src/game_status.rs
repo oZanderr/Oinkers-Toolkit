@@ -1,8 +1,25 @@
 //! Detects whether the Marvel Rivals process is running to block mutating operations on locked pak files.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+
+static CHECK_ENABLED: AtomicBool = AtomicBool::new(true);
+
+pub(crate) fn set_check_enabled(enabled: bool) {
+    CHECK_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Combines the actual process check with the user setting. Guard call sites
+/// use this; UI surfaces continue to use `is_game_running()` so the indicator
+/// stays truthful even when the setting is disabled.
+pub(crate) fn should_block_for_game() -> bool {
+    if !CHECK_ENABLED.load(Ordering::Relaxed) {
+        return false;
+    }
+    is_game_running()
+}
 
 /// Shipping executable name — locks pak/ucas/utoc file handles while the game
 /// runs. The launcher exe does not, so ignore it.

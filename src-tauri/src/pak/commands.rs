@@ -90,6 +90,9 @@ pub(crate) async fn repack_pak(
     input_dir: String,
     output_pak: String,
 ) -> Result<(), String> {
+    if crate::game_status::should_block_for_game() {
+        return Err(crate::game_status::game_running_error());
+    }
     let level = Some(mod_compression_level(&state).to_oodle());
     tauri::async_runtime::spawn_blocking(move || pak::repack_pak(&input_dir, &output_pak, level))
         .await
@@ -103,6 +106,9 @@ pub(crate) async fn repack_iostore(
     output_utoc: String,
     app: AppHandle,
 ) -> Result<(), String> {
+    if crate::game_status::should_block_for_game() {
+        return Err(crate::game_status::game_running_error());
+    }
     let level = Some(mod_compression_level(&state).to_oodle());
     tauri::async_runtime::spawn_blocking(move || {
         pak::repack_iostore(&input_dir, &output_utoc, level, app)

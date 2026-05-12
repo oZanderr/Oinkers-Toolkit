@@ -315,7 +315,7 @@ pub(crate) fn apply_mod_profile(
     name: String,
     game_root: String,
 ) -> Result<ProfileApplyResult, String> {
-    if game_status::is_game_running() {
+    if game_status::should_block_for_game() {
         return Err(game_status::game_running_error());
     }
     let recursive = recursive_mod_scan(&state);

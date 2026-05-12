@@ -140,6 +140,8 @@ export function Settings({
   const [savedModLevel, setSavedModLevel] = useState<CompressionLevel | null>(null);
   const [draftVanillaLevel, setDraftVanillaLevel] = useState<CompressionLevel | null>(null);
   const [savedVanillaLevel, setSavedVanillaLevel] = useState<CompressionLevel | null>(null);
+  const [draftGameRunningCheck, setDraftGameRunningCheck] = useState<boolean | null>(null);
+  const [savedGameRunningCheck, setSavedGameRunningCheck] = useState<boolean | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
@@ -320,6 +322,19 @@ export function Settings({
         console.error(e);
         setDraftVanillaLevel("Optimal1");
         setSavedVanillaLevel("Optimal1");
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke<boolean>("get_game_running_check_enabled")
+      .then((v) => {
+        setDraftGameRunningCheck(v);
+        setSavedGameRunningCheck(v);
+      })
+      .catch((e) => {
+        console.error(e);
+        setDraftGameRunningCheck(true);
+        setSavedGameRunningCheck(true);
       });
   }, []);
 
@@ -553,6 +568,10 @@ export function Settings({
     draftVanillaLevel !== null &&
     savedVanillaLevel !== null &&
     draftVanillaLevel !== savedVanillaLevel;
+  const gameRunningCheckDirty =
+    draftGameRunningCheck !== null &&
+    savedGameRunningCheck !== null &&
+    draftGameRunningCheck !== savedGameRunningCheck;
   const dirty =
     pathDirty ||
     skipDirty ||
@@ -561,7 +580,8 @@ export function Settings({
     autoSyncHeroesDirty ||
     showHeroIconsDirty ||
     modLevelDirty ||
-    vanillaLevelDirty;
+    vanillaLevelDirty ||
+    gameRunningCheckDirty;
 
   async function save() {
     setSaving(true);
@@ -645,6 +665,14 @@ export function Settings({
           console.error(e);
         }
       }
+      if (gameRunningCheckDirty && draftGameRunningCheck !== null) {
+        try {
+          await invoke("set_game_running_check_enabled", { enabled: draftGameRunningCheck });
+          setSavedGameRunningCheck(draftGameRunningCheck);
+        } catch (e) {
+          console.error(e);
+        }
+      }
       if (savedBadgeTimer.current) clearTimeout(savedBadgeTimer.current);
       setSavedBadge(true);
       savedBadgeTimer.current = setTimeout(() => setSavedBadge(false), 2500);
@@ -662,6 +690,7 @@ export function Settings({
     setDraftShowHeroIcons(savedShowHeroIcons);
     setDraftModLevel(savedModLevel);
     setDraftVanillaLevel(savedVanillaLevel);
+    setDraftGameRunningCheck(savedGameRunningCheck);
     setPathError(null);
   }
 
@@ -835,6 +864,28 @@ export function Settings({
                 disabled={draftAutoSyncHeroes === null}
               />
             </div>
+          </div>
+
+          {/* ── Advanced ── */}
+          <div className="flex flex-col overflow-hidden rounded-md border border-border">
+            <div className="border-b border-border bg-card px-3 py-2">
+              <h3 className="text-sm font-semibold">Advanced</h3>
+            </div>
+            <label className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
+              <div className="flex flex-1 flex-col gap-0.5">
+                <span className="text-[13px] font-medium">Game-running check</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Refuse mod install/delete, repack, pak tweaks, signature bypass, and vanilla
+                  rebuild while Marvel Rivals is running. Turn off only if you know the game won't
+                  hold locks on the files you're touching.
+                </span>
+              </div>
+              <Switch
+                checked={draftGameRunningCheck ?? true}
+                onCheckedChange={setDraftGameRunningCheck}
+                disabled={draftGameRunningCheck === null}
+              />
+            </label>
           </div>
 
           {/* ── Compression ── */}

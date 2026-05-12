@@ -21,7 +21,7 @@ use retoc::version::EngineVersion;
 use retoc::zen_asset_conversion::{self, ConvertedZenAssetBundle};
 use retoc::{EIoChunkType, FIoChunkId, FSHAHash, UEPathBuf};
 
-use crate::game_status::{game_running_error, is_game_running};
+use crate::game_status::{game_running_error, should_block_for_game};
 use crate::paths::paks_dir;
 
 const MOUNT_POINT: &str = "../../../";
@@ -201,7 +201,7 @@ pub(crate) fn rebuild_vanilla_container(
 ) -> Result<RebuildReport, String> {
     REBUILD_CANCEL.store(false, Ordering::Relaxed);
 
-    if is_game_running() {
+    if should_block_for_game() {
         return Err(game_running_error());
     }
 
