@@ -142,6 +142,8 @@ export function Settings({
   const [savedVanillaLevel, setSavedVanillaLevel] = useState<CompressionLevel | null>(null);
   const [draftGameRunningCheck, setDraftGameRunningCheck] = useState<boolean | null>(null);
   const [savedGameRunningCheck, setSavedGameRunningCheck] = useState<boolean | null>(null);
+  const [draftConflictCheck, setDraftConflictCheck] = useState<boolean | null>(null);
+  const [savedConflictCheck, setSavedConflictCheck] = useState<boolean | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
@@ -335,6 +337,19 @@ export function Settings({
         console.error(e);
         setDraftGameRunningCheck(true);
         setSavedGameRunningCheck(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke<boolean>("get_mod_conflict_check_enabled")
+      .then((v) => {
+        setDraftConflictCheck(v);
+        setSavedConflictCheck(v);
+      })
+      .catch((e) => {
+        console.error(e);
+        setDraftConflictCheck(true);
+        setSavedConflictCheck(true);
       });
   }, []);
 
@@ -572,6 +587,10 @@ export function Settings({
     draftGameRunningCheck !== null &&
     savedGameRunningCheck !== null &&
     draftGameRunningCheck !== savedGameRunningCheck;
+  const conflictCheckDirty =
+    draftConflictCheck !== null &&
+    savedConflictCheck !== null &&
+    draftConflictCheck !== savedConflictCheck;
   const dirty =
     pathDirty ||
     skipDirty ||
@@ -581,7 +600,8 @@ export function Settings({
     showHeroIconsDirty ||
     modLevelDirty ||
     vanillaLevelDirty ||
-    gameRunningCheckDirty;
+    gameRunningCheckDirty ||
+    conflictCheckDirty;
 
   async function save() {
     setSaving(true);
@@ -673,6 +693,14 @@ export function Settings({
           console.error(e);
         }
       }
+      if (conflictCheckDirty && draftConflictCheck !== null) {
+        try {
+          await invoke("set_mod_conflict_check_enabled", { enabled: draftConflictCheck });
+          setSavedConflictCheck(draftConflictCheck);
+        } catch (e) {
+          console.error(e);
+        }
+      }
       if (savedBadgeTimer.current) clearTimeout(savedBadgeTimer.current);
       setSavedBadge(true);
       savedBadgeTimer.current = setTimeout(() => setSavedBadge(false), 2500);
@@ -691,6 +719,7 @@ export function Settings({
     setDraftModLevel(savedModLevel);
     setDraftVanillaLevel(savedVanillaLevel);
     setDraftGameRunningCheck(savedGameRunningCheck);
+    setDraftConflictCheck(savedConflictCheck);
     setPathError(null);
   }
 
@@ -884,6 +913,21 @@ export function Settings({
                 checked={draftGameRunningCheck ?? true}
                 onCheckedChange={setDraftGameRunningCheck}
                 disabled={draftGameRunningCheck === null}
+              />
+            </label>
+            <label className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
+              <div className="flex flex-1 flex-col gap-0.5">
+                <span className="text-[13px] font-medium">Mod conflict check</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Scan enabled mods for overlapping assets and surface conflicts. Turn off if you
+                  intentionally run combinations that partially override each other and don't want
+                  the warnings.
+                </span>
+              </div>
+              <Switch
+                checked={draftConflictCheck ?? true}
+                onCheckedChange={setDraftConflictCheck}
+                disabled={draftConflictCheck === null}
               />
             </label>
           </div>

@@ -234,9 +234,12 @@ export function Mods({
             `Removed ${s.conflicts_resolved} outdated disabled mod${s.conflicts_resolved !== 1 ? "s" : ""} (replaced by enabled version)`,
             "info"
           );
-        // Check for asset-level conflicts between enabled mods.
+        // Check for asset-level conflicts between enabled mods (skipped if user disabled the setting).
         const enabledMods = s.mod_entries.filter((m) => m.enabled);
-        if (enabledMods.length >= 2) {
+        const conflictCheckEnabled = await invoke<boolean>("get_mod_conflict_check_enabled").catch(
+          () => true
+        );
+        if (conflictCheckEnabled && enabledMods.length >= 2) {
           invoke<ConflictReport>("check_mod_conflicts", { gameRoot: gamePath })
             .then(setConflictReport)
             .catch(() => setConflictReport(null));

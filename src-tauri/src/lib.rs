@@ -55,6 +55,8 @@ pub fn run() {
             settings::set_vanilla_compression_level,
             settings::get_game_running_check_enabled,
             settings::set_game_running_check_enabled,
+            settings::get_mod_conflict_check_enabled,
+            settings::set_mod_conflict_check_enabled,
             // update_check
             update_check::check_for_update,
             update_check::get_auto_check_updates,
