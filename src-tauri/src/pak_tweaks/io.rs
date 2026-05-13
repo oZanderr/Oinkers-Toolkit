@@ -12,8 +12,7 @@ use crate::pak::profile::{RIVALS_PROFILE, strip_mount_prefix};
 
 use super::{PakIniInfo, PakIniListing};
 
-/// Inspect a pak and list every `.ini` entry inside it. Returns `None` if no
-/// INI files are present.
+/// List every `.ini` entry inside a pak; `None` if none present.
 pub(super) fn inspect_pak_for_any_ini(pak_path: &Path) -> Result<Option<PakIniListing>, String> {
     let pak = open_pak(pak_path)?;
     let mut entries: Vec<String> = pak

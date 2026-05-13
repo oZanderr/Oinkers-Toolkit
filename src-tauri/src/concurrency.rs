@@ -1,4 +1,4 @@
-//! Rayon thread pool sized to half the available cores so parallel scans and downstream library work (e.g. retoc's per-block Oodle compression) don't starve the Tauri runtime threads.
+//! Rayon thread pool sized to half the available cores so parallel work doesn't starve the Tauri runtime.
 
 use std::sync::LazyLock;
 
@@ -8,10 +8,8 @@ fn thread_count() -> usize {
         .unwrap_or(2)
 }
 
-/// Initialise rayon's global pool to a polite thread count. Called once at app
-/// startup. Anything that calls `par_iter` without an explicit pool (our code,
-/// retoc, repak) inherits this same budget. Idempotent: a failure here means
-/// some other code already built the global pool; we let that stand.
+/// Sets rayon's global pool so `par_iter` calls inside retoc and repak run on
+/// the same shared thread count instead of spinning up their own default pool.
 pub(crate) fn init_global_pool() {
     let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(thread_count())

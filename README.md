@@ -103,6 +103,10 @@ pnpm tauri build
 - `src-tauri/src/`: Rust backend and Tauri commands
 - `src-tauri/resources/`: bundled runtime resources (for example bypass files)
 
+## Signature Bypass
+
+The toolkit installs a signature bypass so the game will load modified pak containers. The bundled `version.dll` is built from [oZanderr/rivals-sigbypass (proxy branch)](https://github.com/oZanderr/rivals-sigbypass/tree/proxy). Users with the older `dsound.dll` + `.asi` loader can keep using it; the toolkit detects either variant and offers Remove.
+
 ## License
 
 This project is dual-licensed under either of the following, at your option:

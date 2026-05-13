@@ -14,7 +14,6 @@ pub(crate) fn inspect_single_pak(pak_path: &str) -> Result<Option<PakIniInfo>, S
     inspect_pak_for_ini(Path::new(pak_path))
 }
 
-/// Inspect one pak and list every `.ini` entry inside (any-INI variant).
 pub(crate) fn inspect_single_pak_any_ini(pak_path: &str) -> Result<Option<PakIniListing>, String> {
     inspect_pak_for_any_ini(Path::new(pak_path))
 }
@@ -42,9 +41,7 @@ pub(crate) fn scan_mod_paks(game_root: &str, recursive: bool) -> Result<Vec<PakI
     Ok(results)
 }
 
-/// Scan `~mods` and return paks that contain ANY `.ini` file (used by the Pak
-/// INI Editor tab). Unlike `scan_mod_paks`, this is not limited to the curated
-/// Engine/DeviceProfiles filenames.
+/// Scan `~mods` and return paks that contain any `.ini` file.
 pub(crate) fn scan_mod_paks_any_ini(
     game_root: &str,
     recursive: bool,

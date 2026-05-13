@@ -59,6 +59,11 @@ pub(crate) fn is_signature_bypass_installed(game_root: String) -> bool {
 }
 
 #[tauri::command]
+pub(crate) fn get_signature_bypass_kind(game_root: String) -> mods::BypassKind {
+    mods::signature_bypass_kind(&game_root)
+}
+
+#[tauri::command]
 pub(crate) fn open_mods_folder(game_root: String) -> Result<(), String> {
     mods::open_mods_folder(&game_root)
 }

@@ -1,4 +1,4 @@
-//! Per-container vanilla rebuild: walks an edited legacy tree, partitions files between zen packages and pak archive content, builds zen packages with full fidelity (shader_maps + script_objects + UE5_3), routes bulk chunks between base and optional writers, and emits a swap-ready container set.
+//! Per-container vanilla rebuild: partition an edited legacy tree into zen packages + raw pak entries, re-zen with full fidelity, route bulk chunks between base and optional writers, emit a swap-ready container set.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -405,9 +405,8 @@ pub(crate) fn rebuild_vanilla_container(
     let mut memory_mapped_routed = 0usize;
     let mut completed = 0usize;
 
-    // Smaller channel cap reduces in-flight memory and keeps the build phase from
-    // racing ahead of the writer, which causes UI-perceived "stuck" stalls when a
-    // big bulk chunk holds the writer for a few seconds.
+    // Half-size cap so a slow chunk write back-pressures the build phase instead
+    // of letting it queue ahead and balloon memory.
     let channel_cap = std::cmp::max(2, crate::concurrency::POOL.current_num_threads() / 2);
     let (tx, rx) = std::sync::mpsc::sync_channel::<Result<ZenJob, String>>(channel_cap);
 

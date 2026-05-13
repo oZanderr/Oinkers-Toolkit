@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   CheckCircle2,
   CloudDownload,
@@ -76,6 +77,8 @@ const COMPRESSION_LEVEL_DESC: Record<CompressionLevel, string> = {
   Optimal2: "Optimal · level 2",
   Optimal3: "Optimal · level 3 (slowest, smallest)",
 };
+
+type BypassKind = "none" | "legacy" | "modern";
 
 interface CharacterDataInfo {
   character_count: number;
@@ -163,7 +166,7 @@ export function Settings({
     type: "ok" | "err";
   } | null>(null);
   const bypassNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [bypassInstalled, setBypassInstalled] = useState<boolean | null>(null);
+  const [bypassKind, setBypassKind] = useState<BypassKind | null>(null);
 
   const [tweakProfiles, setTweakProfiles] = useState<TweakProfile[]>([]);
   const [profileNotice, setProfileNotice] = useState<{
@@ -218,16 +221,16 @@ export function Settings({
 
   useEffect(() => {
     if (!draftGamePath) {
-      setBypassInstalled(null);
+      setBypassKind(null);
       return;
     }
     let cancelled = false;
-    invoke<boolean>("is_signature_bypass_installed", { gameRoot: draftGamePath })
+    invoke<BypassKind>("get_signature_bypass_kind", { gameRoot: draftGamePath })
       .then((v) => {
-        if (!cancelled) setBypassInstalled(v);
+        if (!cancelled) setBypassKind(v);
       })
       .catch(() => {
-        if (!cancelled) setBypassInstalled(null);
+        if (!cancelled) setBypassKind(null);
       });
     return () => {
       cancelled = true;
@@ -236,16 +239,16 @@ export function Settings({
 
   async function refreshBypassStatus() {
     if (!draftGamePath) {
-      setBypassInstalled(null);
+      setBypassKind(null);
       return;
     }
     try {
-      const v = await invoke<boolean>("is_signature_bypass_installed", {
+      const v = await invoke<BypassKind>("get_signature_bypass_kind", {
         gameRoot: draftGamePath,
       });
-      setBypassInstalled(v);
+      setBypassKind(v);
     } catch {
-      setBypassInstalled(null);
+      setBypassKind(null);
     }
   }
 
@@ -1148,15 +1151,37 @@ export function Settings({
             <div className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
               <div className="flex flex-1 flex-col gap-0.5">
                 <span className="text-[13px] font-medium">
-                  {bypassInstalled ? "Remove bypass files" : "Install bypass files"}
+                  {bypassKind === "modern"
+                    ? "Bypass installed"
+                    : bypassKind === "legacy"
+                      ? "Legacy bypass installed"
+                      : "Install bypass"}
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                  {bypassInstalled
-                    ? "Removes dsound.dll and the bypass plugin from the game directory."
-                    : "Installs dsound.dll and the bypass plugin into the game directory."}
+                  {bypassKind === "modern" ? (
+                    "Removes the bypass from the game directory."
+                  ) : bypassKind === "legacy" ? (
+                    "Older dsound.dll + .asi loader detected. Remove it to switch to the newer single-file bypass."
+                  ) : (
+                    <>
+                      Installs version.dll (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openUrl("https://github.com/oZanderr/rivals-sigbypass/tree/proxy").catch(
+                            console.error
+                          )
+                        }
+                        className="text-foreground underline underline-offset-2 hover:text-primary"
+                      >
+                        oZanderr/rivals-sigbypass
+                      </button>{" "}
+                      proxy) into the game directory. Required to load modified containers.
+                    </>
+                  )}
                 </span>
               </div>
-              {bypassInstalled ? (
+              {bypassKind === "modern" || bypassKind === "legacy" ? (
                 <Button variant="red" size="sm" onClick={removeBypass} disabled={!draftGamePath}>
                   <ShieldOff size={13} />
                   Remove
@@ -1166,7 +1191,7 @@ export function Settings({
                   variant="green"
                   size="sm"
                   onClick={installBypass}
-                  disabled={!draftGamePath || bypassInstalled === null}
+                  disabled={!draftGamePath || bypassKind === null}
                 >
                   <Shield size={13} />
                   Install

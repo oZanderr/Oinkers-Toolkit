@@ -11,9 +11,8 @@ pub(crate) fn set_check_enabled(enabled: bool) {
     CHECK_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-/// Combines the actual process check with the user setting. Guard call sites
-/// use this; UI surfaces continue to use `is_game_running()` so the indicator
-/// stays truthful even when the setting is disabled.
+/// Guard call sites use this; UI surfaces keep using `is_game_running()` so the
+/// indicator stays truthful when the user toggles the check off.
 pub(crate) fn should_block_for_game() -> bool {
     if !CHECK_ENABLED.load(Ordering::Relaxed) {
         return false;

@@ -74,7 +74,7 @@ fn has_entries(path: &Path) -> Result<bool, String> {
         .is_some())
 }
 
-/// Guard that removes a directory the toolkit created during this run if the
+/// Guard that removes a directory the toolkit created during this run if the                               
 /// operation does not complete. Keeps pre-existing user data intact.
 struct OwnedOutputGuard<'a> {
     path: &'a Path,

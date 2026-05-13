@@ -120,6 +120,7 @@ pub fn run() {
             mods::commands::install_signature_bypass,
             mods::commands::remove_signature_bypass,
             mods::commands::is_signature_bypass_installed,
+            mods::commands::get_signature_bypass_kind,
             mods::commands::open_mods_folder,
             mods::commands::toggle_mod_enabled,
             mods::commands::toggle_mods_enabled,
