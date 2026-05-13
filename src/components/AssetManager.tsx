@@ -94,6 +94,13 @@ interface ContentEntry {
   source: ContentSource;
 }
 
+interface PakDerived {
+  entries: ContentEntry[];
+  lowered: string[];
+  heroes: Map<string, number[]>;
+  categories: Map<string, AssetCategory>;
+}
+
 interface CharacterSummary {
   id: number;
   name: string;
@@ -163,6 +170,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
   const contentsScrollRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const listPaksRef = useRef<(silent?: boolean) => Promise<void>>(null!);
+  const pakContentsCacheRef = useRef<Map<string, PakDerived>>(new Map());
 
   // Load game paks on mount
   useEffect(() => {
@@ -181,6 +189,12 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       if (!gamePath) return;
       const modsFolder = `${gamePath}\\MarvelGame\\Marvel\\Content\\Paks\\~mods`;
       if (normalizeFolderPath(event.modsFolder) !== normalizeFolderPath(modsFolder)) return;
+      const modsPrefix = normalizeFolderPath(modsFolder);
+      for (const key of [...pakContentsCacheRef.current.keys()]) {
+        if (normalizeFolderPath(key).startsWith(modsPrefix)) {
+          pakContentsCacheRef.current.delete(key);
+        }
+      }
       listPaksRef.current(true);
     });
   }, [gamePath]);
@@ -272,12 +286,6 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     }
   };
 
-  // Pre-compute lowercase paths once when pakContents changes
-  const pakContentsLower = useMemo(
-    () => pakContents.map((e) => e.path.toLowerCase()),
-    [pakContents]
-  );
-
   const knownHeroIds = useMemo(() => new Set(knownHeroes.map((h) => h.id)), [knownHeroes]);
   const heroNameById = useMemo(() => {
     const m = new Map<number, string>();
@@ -285,9 +293,20 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     return m;
   }, [knownHeroes]);
 
-  // Detect heroes per asset path once per pak load. Cheap (regex + split), but
-  // 50k+ entries warrants caching so virtualizer scroll stays smooth.
+  // Hero set changes invalidate cached heroes/derived maps for every pak.
+  useEffect(() => {
+    pakContentsCacheRef.current.clear();
+  }, [knownHeroIds]);
+
+  const pakContentsLower = useMemo(() => {
+    const hit = selectedPak ? pakContentsCacheRef.current.get(selectedPak) : null;
+    if (hit && hit.entries === pakContents) return hit.lowered;
+    return pakContents.map((e) => e.path.toLowerCase());
+  }, [pakContents, selectedPak]);
+
   const heroesByPath = useMemo(() => {
+    const hit = selectedPak ? pakContentsCacheRef.current.get(selectedPak) : null;
+    if (hit && hit.entries === pakContents) return hit.heroes;
     if (knownHeroIds.size === 0 || pakContents.length === 0) {
       return new Map<string, number[]>();
     }
@@ -297,13 +316,15 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       if (ids.length > 0) map.set(e.path, ids);
     }
     return map;
-  }, [pakContents, knownHeroIds]);
+  }, [pakContents, selectedPak, knownHeroIds]);
 
   const categoriesByPath = useMemo(() => {
+    const hit = selectedPak ? pakContentsCacheRef.current.get(selectedPak) : null;
+    if (hit && hit.entries === pakContents) return hit.categories;
     const map = new Map<string, AssetCategory>();
     for (const e of pakContents) map.set(e.path, classifyAssetPath(e.path));
     return map;
-  }, [pakContents]);
+  }, [pakContents, selectedPak]);
 
   const categoryCounts = useMemo(() => {
     const counts = Object.fromEntries(ALL_CATEGORIES.map((c) => [c, 0])) as Record<
@@ -388,6 +409,7 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     if (!silent) {
       setNotice(null);
       if (noticeTimer.current) clearTimeout(noticeTimer.current);
+      pakContentsCacheRef.current.clear();
     }
 
     if (!gamePath) {
@@ -403,8 +425,13 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       if (paks.length === 0) {
         setSelectedPak("");
         setPakContents([]);
+        pakContentsCacheRef.current.clear();
         if (!silent) showNotice("No .pak files found.", "err");
       } else {
+        const known = new Set(paks.map((p) => p.path));
+        for (const key of [...pakContentsCacheRef.current.keys()]) {
+          if (!known.has(key)) pakContentsCacheRef.current.delete(key);
+        }
         if (selectedPak && !paks.some((p) => p.path === selectedPak)) {
           setSelectedPak("");
           setPakContents([]);
@@ -429,9 +456,19 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
     setSelectedPak(pak);
     setFilterText("");
     setDebouncedFilter("");
-    setPakContents([]);
     setSelectedEntries(new Set());
     lastClickedIndex.current = null;
+
+    const cached = pakContentsCacheRef.current.get(pak);
+    if (cached) {
+      setPakContents(cached.entries);
+      const displayName = pak.split(/[/\\]/).pop();
+      const info = infoOverride ?? pakList.find((p) => p.path === pak);
+      const optionalSuffix = info?.optional_pak ? " (incl. optional)" : "";
+      showNotice(`${cached.entries.length} file(s) inside ${displayName}${optionalSuffix}`, "ok");
+      return;
+    }
+    setPakContents([]);
 
     let info = infoOverride ?? pakList.find((p) => p.path === pak);
     if (!info) {
@@ -503,16 +540,39 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         for (const f of optionalUtocResult.files) pushUnique(f, "utoc");
       }
 
-      setPakContents(entries);
       const displayName = pak.split(/[/\\]/).pop();
       const utocFailed = !utocResult.ok || !optionalUtocResult.ok;
       const optionalSuffix = optionalPak ? " (incl. optional)" : "";
       if (utocFailed) {
+        setPakContents(entries);
         showNotice(
           `${entries.length} file(s) inside ${displayName}${optionalSuffix} (utoc failed to load)`,
           "err"
         );
       } else {
+        const lowered = new Array<string>(entries.length);
+        const heroes = new Map<string, number[]>();
+        const categories = new Map<string, AssetCategory>();
+        const haveHeroes = knownHeroIds.size > 0;
+        const CHUNK = 8000;
+        for (let i = 0; i < entries.length; i += CHUNK) {
+          const end = Math.min(i + CHUNK, entries.length);
+          for (let j = i; j < end; j++) {
+            const e = entries[j];
+            lowered[j] = e.path.toLowerCase();
+            categories.set(e.path, classifyAssetPath(e.path));
+            if (haveHeroes) {
+              const ids = detectHeroIdsInPath(e.path, knownHeroIds);
+              if (ids.length > 0) heroes.set(e.path, ids);
+            }
+          }
+          if (end < entries.length) {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            if (gen !== loadGenRef.current) return;
+          }
+        }
+        pakContentsCacheRef.current.set(pak, { entries, lowered, heroes, categories });
+        setPakContents(entries);
         showNotice(`${entries.length} file(s) inside ${displayName}${optionalSuffix}`, "ok");
       }
     } catch (e: unknown) {
@@ -1661,6 +1721,11 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
                 <p className="text-sm text-muted-foreground">
                   Select a pak from the left, or open one manually.
                 </p>
+              </div>
+            ) : busy && visible.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
+                <Loader2 size={20} className="animate-spin text-muted-foreground/60" />
+                <p className="text-sm text-muted-foreground">Reading contents…</p>
               </div>
             ) : visible.length === 0 ? (
               <p className="p-4 text-center text-sm text-muted-foreground">
