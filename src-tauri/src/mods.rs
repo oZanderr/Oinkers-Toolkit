@@ -10,14 +10,14 @@ pub(crate) mod heroes;
 pub(crate) mod profiles;
 mod status;
 
+pub(crate) use bypass::BypassKind;
 pub(crate) use conflicts::ConflictReport;
 pub(crate) use folder::{BulkOpResult, InstallResult};
 pub(crate) use status::ModsStatus;
 
-// Bypass files bundled at compile time.
-static BYPASS_DSOUND: &[u8] = include_bytes!("../resources/bypass/dsound.dll");
-static BYPASS_ASI: &[u8] =
-    include_bytes!("../resources/bypass/plugins/MarvelRivalsUTOCSignatureBypass.asi");
+// Installed by `install_signature_bypass`; built from oZanderr/rivals-sigbypass
+// `proxy` branch.
+static BYPASS_VERSION_DLL: &[u8] = include_bytes!("../resources/bypass/version.dll");
 
 /// Collect relative paths of mod-related files (.pak, .ucas, .utoc, and their
 /// `.disabled` variants) under the given root directory. When `recursive` is
@@ -44,13 +44,6 @@ pub(crate) fn walk_mod_files(root: &std::path::Path, recursive: bool) -> Vec<std
         })
         .filter_map(|e| e.path().strip_prefix(root).ok().map(|r| r.to_path_buf()))
         .collect()
-}
-
-/// Check whether a file exists and matches the expected bytes.
-fn file_matches(path: &std::path::Path, expected: &[u8]) -> bool {
-    std::fs::read(path)
-        .map(|data| data == expected)
-        .unwrap_or(false)
 }
 
 /// Total on-disk size of a mod pak plus companion `.ucas`/`.utoc` when present.
@@ -94,6 +87,10 @@ pub(crate) fn remove_signature_bypass(game_root: &str) -> Result<String, String>
 
 pub(crate) fn is_signature_bypass_installed(game_root: &str) -> bool {
     bypass::is_signature_bypass_installed(game_root)
+}
+
+pub(crate) fn signature_bypass_kind(game_root: &str) -> BypassKind {
+    bypass::bypass_install_kind(game_root)
 }
 
 pub(crate) fn open_mods_folder(game_root: &str) -> Result<(), String> {

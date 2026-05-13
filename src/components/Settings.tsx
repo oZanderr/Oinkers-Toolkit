@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   CheckCircle2,
   CloudDownload,
@@ -23,8 +24,17 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tip } from "@/components/ui/tooltip";
+import { useSaveHotkeys } from "@/hooks/useSaveHotkeys";
+import { useScrollAtBottom } from "@/hooks/useScrollAtBottom";
 import type { UpdateInfo } from "@/hooks/useUpdateCheck";
 import { emitModsChanged } from "@/lib/modsEvents";
 import { setShowHeroIcons } from "@/lib/showHeroIcons";
@@ -49,6 +59,28 @@ interface InstallInfo {
   source: string;
   launch_url: string;
 }
+
+type CompressionLevel = "None" | "Fast" | "Normal" | "Optimal1" | "Optimal2" | "Optimal3";
+
+const COMPRESSION_LEVELS: CompressionLevel[] = [
+  "None",
+  "Fast",
+  "Normal",
+  "Optimal1",
+  "Optimal2",
+  "Optimal3",
+];
+
+const COMPRESSION_LEVEL_DESC: Record<CompressionLevel, string> = {
+  None: "No compression. Largest output, fastest write.",
+  Fast: "Fastest LZ, larger output",
+  Normal: "Default for mods. Greedy LZ.",
+  Optimal1: "Default for vanilla rebuild. Faster optimal encoder.",
+  Optimal2: "Optimal · level 2",
+  Optimal3: "Optimal · level 3 (slowest, smallest)",
+};
+
+type BypassKind = "none" | "legacy" | "modern";
 
 interface CharacterDataInfo {
   character_count: number;
@@ -109,6 +141,14 @@ export function Settings({
   const [savedAutoSyncHeroes, setSavedAutoSyncHeroes] = useState<boolean | null>(null);
   const [draftShowHeroIcons, setDraftShowHeroIcons] = useState<boolean | null>(null);
   const [savedShowHeroIcons, setSavedShowHeroIcons] = useState<boolean | null>(null);
+  const [draftModLevel, setDraftModLevel] = useState<CompressionLevel | null>(null);
+  const [savedModLevel, setSavedModLevel] = useState<CompressionLevel | null>(null);
+  const [draftVanillaLevel, setDraftVanillaLevel] = useState<CompressionLevel | null>(null);
+  const [savedVanillaLevel, setSavedVanillaLevel] = useState<CompressionLevel | null>(null);
+  const [draftGameRunningCheck, setDraftGameRunningCheck] = useState<boolean | null>(null);
+  const [savedGameRunningCheck, setSavedGameRunningCheck] = useState<boolean | null>(null);
+  const [draftConflictCheck, setDraftConflictCheck] = useState<boolean | null>(null);
+  const [savedConflictCheck, setSavedConflictCheck] = useState<boolean | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [pathError, setPathError] = useState<string | null>(null);
@@ -128,7 +168,7 @@ export function Settings({
     type: "ok" | "err";
   } | null>(null);
   const bypassNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [bypassInstalled, setBypassInstalled] = useState<boolean | null>(null);
+  const [bypassKind, setBypassKind] = useState<BypassKind | null>(null);
 
   const [tweakProfiles, setTweakProfiles] = useState<TweakProfile[]>([]);
   const [profileNotice, setProfileNotice] = useState<{
@@ -183,16 +223,16 @@ export function Settings({
 
   useEffect(() => {
     if (!draftGamePath) {
-      setBypassInstalled(null);
+      setBypassKind(null);
       return;
     }
     let cancelled = false;
-    invoke<boolean>("is_signature_bypass_installed", { gameRoot: draftGamePath })
+    invoke<BypassKind>("get_signature_bypass_kind", { gameRoot: draftGamePath })
       .then((v) => {
-        if (!cancelled) setBypassInstalled(v);
+        if (!cancelled) setBypassKind(v);
       })
       .catch(() => {
-        if (!cancelled) setBypassInstalled(null);
+        if (!cancelled) setBypassKind(null);
       });
     return () => {
       cancelled = true;
@@ -201,16 +241,16 @@ export function Settings({
 
   async function refreshBypassStatus() {
     if (!draftGamePath) {
-      setBypassInstalled(null);
+      setBypassKind(null);
       return;
     }
     try {
-      const v = await invoke<boolean>("is_signature_bypass_installed", {
+      const v = await invoke<BypassKind>("get_signature_bypass_kind", {
         gameRoot: draftGamePath,
       });
-      setBypassInstalled(v);
+      setBypassKind(v);
     } catch {
-      setBypassInstalled(null);
+      setBypassKind(null);
     }
   }
 
@@ -263,6 +303,58 @@ export function Settings({
         console.error(e);
         setDraftShowHeroIcons(false);
         setSavedShowHeroIcons(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke<CompressionLevel>("get_mod_compression_level")
+      .then((v) => {
+        setDraftModLevel(v);
+        setSavedModLevel(v);
+      })
+      .catch((e) => {
+        console.error(e);
+        setDraftModLevel("Normal");
+        setSavedModLevel("Normal");
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke<CompressionLevel>("get_vanilla_compression_level")
+      .then((v) => {
+        setDraftVanillaLevel(v);
+        setSavedVanillaLevel(v);
+      })
+      .catch((e) => {
+        console.error(e);
+        setDraftVanillaLevel("Optimal1");
+        setSavedVanillaLevel("Optimal1");
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke<boolean>("get_game_running_check_enabled")
+      .then((v) => {
+        setDraftGameRunningCheck(v);
+        setSavedGameRunningCheck(v);
+      })
+      .catch((e) => {
+        console.error(e);
+        setDraftGameRunningCheck(true);
+        setSavedGameRunningCheck(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke<boolean>("get_mod_conflict_check_enabled")
+      .then((v) => {
+        setDraftConflictCheck(v);
+        setSavedConflictCheck(v);
+      })
+      .catch((e) => {
+        console.error(e);
+        setDraftConflictCheck(true);
+        setSavedConflictCheck(true);
       });
   }, []);
 
@@ -490,13 +582,31 @@ export function Settings({
     draftShowHeroIcons !== null &&
     savedShowHeroIcons !== null &&
     draftShowHeroIcons !== savedShowHeroIcons;
+  const modLevelDirty =
+    draftModLevel !== null && savedModLevel !== null && draftModLevel !== savedModLevel;
+  const vanillaLevelDirty =
+    draftVanillaLevel !== null &&
+    savedVanillaLevel !== null &&
+    draftVanillaLevel !== savedVanillaLevel;
+  const gameRunningCheckDirty =
+    draftGameRunningCheck !== null &&
+    savedGameRunningCheck !== null &&
+    draftGameRunningCheck !== savedGameRunningCheck;
+  const conflictCheckDirty =
+    draftConflictCheck !== null &&
+    savedConflictCheck !== null &&
+    draftConflictCheck !== savedConflictCheck;
   const dirty =
     pathDirty ||
     skipDirty ||
     autoCheckDirty ||
     recursiveDirty ||
     autoSyncHeroesDirty ||
-    showHeroIconsDirty;
+    showHeroIconsDirty ||
+    modLevelDirty ||
+    vanillaLevelDirty ||
+    gameRunningCheckDirty ||
+    conflictCheckDirty;
 
   async function save() {
     setSaving(true);
@@ -564,6 +674,38 @@ export function Settings({
           console.error(e);
         }
       }
+      if (modLevelDirty && draftModLevel !== null) {
+        try {
+          await invoke("set_mod_compression_level", { level: draftModLevel });
+          setSavedModLevel(draftModLevel);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      if (vanillaLevelDirty && draftVanillaLevel !== null) {
+        try {
+          await invoke("set_vanilla_compression_level", { level: draftVanillaLevel });
+          setSavedVanillaLevel(draftVanillaLevel);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      if (gameRunningCheckDirty && draftGameRunningCheck !== null) {
+        try {
+          await invoke("set_game_running_check_enabled", { enabled: draftGameRunningCheck });
+          setSavedGameRunningCheck(draftGameRunningCheck);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      if (conflictCheckDirty && draftConflictCheck !== null) {
+        try {
+          await invoke("set_mod_conflict_check_enabled", { enabled: draftConflictCheck });
+          setSavedConflictCheck(draftConflictCheck);
+        } catch (e) {
+          console.error(e);
+        }
+      }
       if (savedBadgeTimer.current) clearTimeout(savedBadgeTimer.current);
       setSavedBadge(true);
       savedBadgeTimer.current = setTimeout(() => setSavedBadge(false), 2500);
@@ -579,12 +721,19 @@ export function Settings({
     setDraftRecursive(savedRecursive);
     setDraftAutoSyncHeroes(savedAutoSyncHeroes);
     setDraftShowHeroIcons(savedShowHeroIcons);
+    setDraftModLevel(savedModLevel);
+    setDraftVanillaLevel(savedVanillaLevel);
+    setDraftGameRunningCheck(savedGameRunningCheck);
+    setDraftConflictCheck(savedConflictCheck);
     setPathError(null);
   }
 
+  const { atBottom, scrollRef, sentinelRef } = useScrollAtBottom();
+  useSaveHotkeys({ dirty, saving, onSave: save, onDiscard: discard });
+
   return (
     <div className="flex flex-1 min-h-0 w-full flex-col">
-      <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable]">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto scrollbar-gutter-stable">
         <div className="flex flex-col gap-4">
           {/* ── Header ── */}
           <div className="flex min-h-8 items-center gap-3">
@@ -754,6 +903,105 @@ export function Settings({
             </div>
           </div>
 
+          {/* ── Advanced ── */}
+          <div className="flex flex-col overflow-hidden rounded-md border border-border">
+            <div className="border-b border-border bg-card px-3 py-2">
+              <h3 className="text-sm font-semibold">Advanced</h3>
+            </div>
+            <label className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
+              <div className="flex flex-1 flex-col gap-0.5">
+                <span className="text-[13px] font-medium">Game-running check</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Refuse mod install/delete, repack, pak tweaks, signature bypass, and vanilla
+                  rebuild while Marvel Rivals is running. Turn off only if you know the game won't
+                  hold locks on the files you're touching.
+                </span>
+              </div>
+              <Switch
+                checked={draftGameRunningCheck ?? true}
+                onCheckedChange={setDraftGameRunningCheck}
+                disabled={draftGameRunningCheck === null}
+              />
+            </label>
+            <label className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
+              <div className="flex flex-1 flex-col gap-0.5">
+                <span className="text-[13px] font-medium">Mod conflict check</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Scan enabled mods for overlapping assets and surface conflicts. Turn off if you
+                  intentionally run combinations that partially override each other and don't want
+                  the warnings.
+                </span>
+              </div>
+              <Switch
+                checked={draftConflictCheck ?? true}
+                onCheckedChange={setDraftConflictCheck}
+                disabled={draftConflictCheck === null}
+              />
+            </label>
+          </div>
+
+          {/* ── Compression ── */}
+          <div className="flex flex-col overflow-hidden rounded-md border border-border">
+            <div className="border-b border-border bg-card px-3 py-2">
+              <h3 className="text-sm font-semibold">Compression</h3>
+            </div>
+            <div className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
+              <div className="flex flex-1 flex-col gap-0.5">
+                <span className="text-[13px] font-medium">Mod repack level</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Oodle Kraken level for "Repack Folder" output. Higher = smaller mod paks but
+                  slower. Default: Normal.
+                </span>
+              </div>
+              <Select
+                value={draftModLevel ?? undefined}
+                onValueChange={(v) => setDraftModLevel(v as CompressionLevel)}
+                disabled={draftModLevel === null}
+              >
+                <SelectTrigger size="sm" className="h-8 w-36 text-sm">
+                  <SelectValue placeholder="Loading…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {COMPRESSION_LEVELS.map((lvl) => (
+                    <SelectItem key={lvl} value={lvl}>
+                      {lvl}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
+              <div className="flex flex-1 flex-col gap-0.5">
+                <span className="text-[13px] font-medium">Vanilla rebuild level</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Oodle Kraken level for "Rebuild container" output. Default: Optimal1 (close to
+                  vanilla, reasonable speed).
+                </span>
+                {draftVanillaLevel && (
+                  <span className="text-[11px] text-muted-foreground/80">
+                    {COMPRESSION_LEVEL_DESC[draftVanillaLevel]}
+                  </span>
+                )}
+              </div>
+              <Select
+                value={draftVanillaLevel ?? undefined}
+                onValueChange={(v) => setDraftVanillaLevel(v as CompressionLevel)}
+                disabled={draftVanillaLevel === null}
+              >
+                <SelectTrigger size="sm" className="h-8 w-36 text-sm">
+                  <SelectValue placeholder="Loading…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {COMPRESSION_LEVELS.map((lvl) => (
+                    <SelectItem key={lvl} value={lvl}>
+                      {lvl}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
           {/* ── Config Presets ── */}
           <div className="flex flex-col overflow-hidden rounded-md border border-border">
             <div className="flex items-center gap-2 border-b border-border bg-card px-3 py-2">
@@ -908,15 +1156,37 @@ export function Settings({
             <div className="flex items-center gap-3 rounded-sm px-3 py-3 hover:bg-secondary/50">
               <div className="flex flex-1 flex-col gap-0.5">
                 <span className="text-[13px] font-medium">
-                  {bypassInstalled ? "Remove bypass files" : "Install bypass files"}
+                  {bypassKind === "modern"
+                    ? "Bypass installed"
+                    : bypassKind === "legacy"
+                      ? "Legacy bypass installed"
+                      : "Install bypass"}
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                  {bypassInstalled
-                    ? "Removes dsound.dll and the bypass plugin from the game directory."
-                    : "Installs dsound.dll and the bypass plugin into the game directory."}
+                  {bypassKind === "modern" ? (
+                    "Removes the bypass from the game directory."
+                  ) : bypassKind === "legacy" ? (
+                    "Older dsound.dll + .asi loader detected. Remove it to switch to the newer single-file bypass."
+                  ) : (
+                    <>
+                      Installs version.dll (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openUrl("https://github.com/oZanderr/rivals-sigbypass/tree/proxy").catch(
+                            console.error
+                          )
+                        }
+                        className="text-foreground underline underline-offset-2 hover:text-primary"
+                      >
+                        oZanderr/rivals-sigbypass
+                      </button>{" "}
+                      proxy) into the game directory. Required to load modified containers.
+                    </>
+                  )}
                 </span>
               </div>
-              {bypassInstalled ? (
+              {bypassKind === "modern" || bypassKind === "legacy" ? (
                 <Button variant="red" size="sm" onClick={removeBypass} disabled={!draftGamePath}>
                   <ShieldOff size={13} />
                   Remove
@@ -926,7 +1196,7 @@ export function Settings({
                   variant="green"
                   size="sm"
                   onClick={installBypass}
-                  disabled={!draftGamePath || bypassInstalled === null}
+                  disabled={!draftGamePath || bypassKind === null}
                 >
                   <Shield size={13} />
                   Install
@@ -984,38 +1254,51 @@ export function Settings({
             </div>
           </div>
         </div>
+        <div ref={sentinelRef} aria-hidden className="h-px w-full shrink-0" />
       </div>
 
-      {/* ── Save bar (always rendered to avoid layout shift) ── */}
+      {/* Soft fade above save bar so cut-off descriptions don't slice abruptly. */}
+      {!atBottom && (
+        <div
+          aria-hidden
+          className="pointer-events-none -mt-8 h-8 shrink-0 bg-linear-to-t from-background to-transparent"
+        />
+      )}
+
+      {/* Save bar collapses to zero height when inactive so it doesn't reserve space. */}
       <div
         className={cn(
-          "flex shrink-0 items-center justify-end gap-2 border-t border-border pt-2 transition-opacity duration-150",
-          dirty || savedBadge ? "opacity-100" : "pointer-events-none opacity-0"
+          "grid shrink-0 transition-[grid-template-rows] duration-200",
+          dirty || savedBadge ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
         )}
       >
-        {savedBadge && !dirty && (
-          <span className="mr-auto flex items-center gap-1.5 text-[12px] font-medium text-ok">
-            <CheckCircle2 size={13} strokeWidth={2.5} />
-            Saved
-          </span>
-        )}
-        {dirty && (
-          <span className="mr-auto flex items-center gap-1.5 text-[12px] font-medium text-warn">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warn opacity-60" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-warn" />
-            </span>
-            Unsaved changes
-          </span>
-        )}
-        <Button variant="outline" onClick={discard} disabled={!dirty || saving}>
-          <Undo2 size={14} />
-          Discard
-        </Button>
-        <Button variant="blue" onClick={save} disabled={!dirty || saving}>
-          <Save size={14} />
-          Save
-        </Button>
+        <div className="overflow-hidden">
+          <div className="flex items-center justify-end gap-2 pt-2">
+            {savedBadge && !dirty && (
+              <span className="mr-auto flex items-center gap-1.5 text-[12px] font-medium text-ok">
+                <CheckCircle2 size={13} strokeWidth={2.5} />
+                Saved
+              </span>
+            )}
+            {dirty && (
+              <span className="mr-auto flex items-center gap-1.5 text-[12px] font-medium text-warn">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-warn opacity-60" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-warn" />
+                </span>
+                Unsaved changes
+              </span>
+            )}
+            <Button variant="outline" onClick={discard} disabled={!dirty || saving}>
+              <Undo2 size={14} />
+              Discard
+            </Button>
+            <Button variant="blue" onClick={save} disabled={!dirty || saving}>
+              <Save size={14} />
+              Save
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

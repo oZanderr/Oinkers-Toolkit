@@ -6,6 +6,7 @@ mod audio;
 mod concurrency;
 mod detect;
 mod game_status;
+mod game_user_settings;
 mod launch_record;
 mod mods;
 mod pak;
@@ -20,10 +21,13 @@ mod update_check;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[allow(clippy::expect_used)]
 pub fn run() {
+    concurrency::init_global_pool();
+    let loaded_settings = settings::Settings::load();
+    game_status::set_check_enabled(loaded_settings.game_running_check_enabled);
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage::<settings::SettingsState>(std::sync::Mutex::new(settings::Settings::load()))
+        .manage::<settings::SettingsState>(std::sync::Mutex::new(loaded_settings))
         .manage::<mods::hero_cache::HeroCacheState>(std::sync::Mutex::new(
             mods::hero_cache::HeroCache::load(),
         ))
@@ -36,6 +40,7 @@ pub fn run() {
             paths::path_exists,
             // game_status
             game_status::get_game_running,
+            game_status::get_should_block_for_game,
             launch_record::get_skip_launcher,
             launch_record::set_skip_launcher,
             // settings
@@ -46,6 +51,14 @@ pub fn run() {
             settings::get_game_path,
             settings::get_saved_install_info,
             settings::set_game_path,
+            settings::get_mod_compression_level,
+            settings::set_mod_compression_level,
+            settings::get_vanilla_compression_level,
+            settings::set_vanilla_compression_level,
+            settings::get_game_running_check_enabled,
+            settings::set_game_running_check_enabled,
+            settings::get_mod_conflict_check_enabled,
+            settings::set_mod_conflict_check_enabled,
             // update_check
             update_check::check_for_update,
             update_check::get_auto_check_updates,
@@ -55,6 +68,7 @@ pub fn run() {
             // sounds
             sounds::build_sound_mod,
             sounds::extract_sound_wavs,
+            sounds::load_sound_mod_for_edit,
             // pak
             pak::commands::list_pak_files,
             pak::commands::list_pak_files_info,
@@ -72,6 +86,10 @@ pub fn run() {
             pak::commands::count_utoc_legacy_packages,
             pak::commands::extract_utoc_legacy,
             pak::commands::cancel_legacy_extraction,
+            pak::commands::extract_vanilla_container,
+            pak::commands::cancel_vanilla_extract,
+            pak::commands::rebuild_vanilla_container,
+            pak::commands::cancel_vanilla_rebuild,
             // pak_tweaks
             pak_tweaks::commands::inspect_pak_path,
             pak_tweaks::commands::scan_mod_paks_for_ini,
@@ -79,6 +97,8 @@ pub fn run() {
             pak_tweaks::commands::apply_pak_tweak_edits,
             pak_tweaks::commands::extract_pak_ini,
             pak_tweaks::commands::save_pak_ini,
+            pak_tweaks::commands::inspect_pak_path_any_ini,
+            pak_tweaks::commands::scan_mod_paks_any_ini,
             // scalability
             scalability::commands::get_scalability_path,
             scalability::commands::read_scalability,
@@ -86,6 +106,12 @@ pub fn run() {
             scalability::commands::get_tweak_definitions,
             scalability::commands::detect_tweaks,
             scalability::commands::apply_tweaks,
+            game_user_settings::commands::get_game_user_settings_path,
+            game_user_settings::commands::read_game_user_settings,
+            game_user_settings::commands::write_game_user_settings,
+            game_user_settings::commands::get_game_user_settings_definitions,
+            game_user_settings::commands::detect_game_user_settings_tweaks,
+            game_user_settings::commands::apply_game_user_settings_tweaks,
             tweaks::shader_cache::clear_shader_cache,
             // tweaks/profiles
             tweaks::profiles::list_tweak_profiles,
@@ -103,6 +129,7 @@ pub fn run() {
             mods::commands::install_signature_bypass,
             mods::commands::remove_signature_bypass,
             mods::commands::is_signature_bypass_installed,
+            mods::commands::get_signature_bypass_kind,
             mods::commands::open_mods_folder,
             mods::commands::toggle_mod_enabled,
             mods::commands::toggle_mods_enabled,
