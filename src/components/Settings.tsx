@@ -74,8 +74,8 @@ const COMPRESSION_LEVELS: CompressionLevel[] = [
 const COMPRESSION_LEVEL_DESC: Record<CompressionLevel, string> = {
   None: "No compression. Largest output, fastest write.",
   Fast: "Fastest LZ, larger output",
-  Normal: "Default for mods. Greedy LZ.",
-  Optimal1: "Default for vanilla rebuild. Faster optimal encoder.",
+  Normal: "Default for mods and vanilla rebuild. Greedy LZ.",
+  Optimal1: "Faster optimal encoder.",
   Optimal2: "Optimal · level 2",
   Optimal3: "Optimal · level 3 (slowest, smallest)",
 };
@@ -327,8 +327,8 @@ export function Settings({
       })
       .catch((e) => {
         console.error(e);
-        setDraftVanillaLevel("Optimal1");
-        setSavedVanillaLevel("Optimal1");
+        setDraftVanillaLevel("Normal");
+        setSavedVanillaLevel("Normal");
       });
   }, []);
 
@@ -974,8 +974,8 @@ export function Settings({
               <div className="flex flex-1 flex-col gap-0.5">
                 <span className="text-[13px] font-medium">Vanilla rebuild level</span>
                 <span className="text-[11px] text-muted-foreground">
-                  Oodle Kraken level for "Rebuild container" output. Default: Optimal1 (close to
-                  vanilla, reasonable speed).
+                  Oodle Kraken level for "Rebuild container" output. Default: Normal (fast, solid
+                  ratio).
                 </span>
                 {draftVanillaLevel && (
                   <span className="text-[11px] text-muted-foreground/80">

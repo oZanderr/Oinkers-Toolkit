@@ -61,7 +61,7 @@ fn default_mod_compression_level() -> CompressionLevelSetting {
 }
 
 fn default_vanilla_compression_level() -> CompressionLevelSetting {
-    CompressionLevelSetting::Optimal1
+    CompressionLevelSetting::Normal
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -232,7 +232,7 @@ pub(crate) fn vanilla_compression_level(
     state
         .lock()
         .map(|s| s.vanilla_compression_level)
-        .unwrap_or(CompressionLevelSetting::Optimal1)
+        .unwrap_or(CompressionLevelSetting::Normal)
 }
 
 #[tauri::command]
