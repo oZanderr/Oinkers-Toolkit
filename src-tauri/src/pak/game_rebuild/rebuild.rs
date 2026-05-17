@@ -118,12 +118,8 @@ fn rel_string(legacy_dir: &Path, file: &Path) -> Result<String, String> {
 
 struct ZenJob {
     converted: ConvertedZenAssetBundle,
-    mounted_path: UEPathBuf,
     rel: String,
     primary_ext: &'static str,
-    ubulk_bytes: Option<Vec<u8>>,
-    uptnl_bytes: Option<Vec<u8>>,
-    m_ubulk_bytes: Option<Vec<u8>>,
 }
 
 fn build_zen_job(
@@ -155,16 +151,13 @@ fn build_zen_job(
         fs::read(&primary_path).map_err(|e| format!("read {}: {e}", primary_path.display()))?;
     let exp_bytes =
         fs::read(&uexp_path).map_err(|e| format!("read {}: {e}", uexp_path.display()))?;
-    let ubulk_bytes: Option<Vec<u8>> = fs::read(&ubulk_path).ok();
-    let uptnl_bytes: Option<Vec<u8>> = fs::read(&uptnl_path).ok();
-    let m_ubulk_bytes: Option<Vec<u8>> = fs::read(&m_ubulk_path).ok();
 
     let bundle = FSerializedAssetBundle {
         asset_file_buffer: asset_bytes,
         exports_file_buffer: exp_bytes,
-        bulk_data_buffer: ubulk_bytes.clone(),
-        optional_bulk_data_buffer: uptnl_bytes.clone(),
-        memory_mapped_bulk_data_buffer: m_ubulk_bytes.clone(),
+        bulk_data_buffer: fs::read(&ubulk_path).ok(),
+        optional_bulk_data_buffer: fs::read(&uptnl_path).ok(),
+        memory_mapped_bulk_data_buffer: fs::read(&m_ubulk_path).ok(),
     };
 
     let converted = zen_asset_conversion::build_zen_asset(
@@ -182,12 +175,8 @@ fn build_zen_job(
 
     Ok(ZenJob {
         converted,
-        mounted_path,
         rel,
         primary_ext,
-        ubulk_bytes,
-        uptnl_bytes,
-        m_ubulk_bytes,
     })
 }
 
@@ -293,7 +282,7 @@ pub(crate) fn rebuild_vanilla_container(
         }
     }
 
-    let mut pak_entries: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut pak_entries: Vec<(String, PathBuf)> = Vec::new();
     for path in &all_files {
         if shader_extras.contains(path) {
             continue;
@@ -307,8 +296,7 @@ pub(crate) fn rebuild_vanilla_container(
             continue;
         }
         let rel = rel_string(legacy_path, path)?;
-        let bytes = fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        pak_entries.push((rel, bytes));
+        pak_entries.push((rel, path.clone()));
     }
 
     let mut shader_maps: HashMap<String, Vec<FSHAHash>> = HashMap::new();
@@ -458,18 +446,18 @@ pub(crate) fn rebuild_vanilla_container(
                 .write_package_data(&mut base_writer)
                 .map_err(|e| format!("write_package_data {}: {e}", job.rel))?;
             let pkg_id = job.converted.package_id;
-            drop(job.converted);
 
-            if let Some(bytes) = job.ubulk_bytes.take() {
+            if let Some(bytes) = job.converted.take_bulk_data() {
                 let id = FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::BulkData);
+                let path = job.converted.mounted_path().with_extension("ubulk");
                 base_writer
-                    .write_chunk(id, Some(&job.mounted_path.with_extension("ubulk")), &bytes)
+                    .write_chunk(id, Some(&path), &bytes)
                     .map_err(|e| format!("write ubulk {}: {e}", job.rel))?;
                 ubulk_routed += 1;
             }
-            if let Some(bytes) = job.uptnl_bytes.take() {
+            if let Some(bytes) = job.converted.take_optional_bulk_data() {
                 let id = FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::OptionalBulkData);
-                let path = job.mounted_path.with_extension("uptnl");
+                let path = job.converted.mounted_path().with_extension("uptnl");
                 match &mut optional_writer {
                     Some(w) => w.write_chunk(id, Some(&path), &bytes),
                     None => base_writer.write_chunk(id, Some(&path), &bytes),
@@ -477,9 +465,9 @@ pub(crate) fn rebuild_vanilla_container(
                 .map_err(|e| format!("write uptnl {}: {e}", job.rel))?;
                 uptnl_routed += 1;
             }
-            if let Some(bytes) = job.m_ubulk_bytes.take() {
+            if let Some(bytes) = job.converted.take_memory_mapped_bulk_data() {
                 let id = FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::MemoryMappedBulkData);
-                let path = job.mounted_path.with_extension("m.ubulk");
+                let path = job.converted.mounted_path().with_extension("m.ubulk");
                 match &mut optional_writer {
                     Some(w) => w.write_chunk(id, Some(&path), &bytes),
                     None => base_writer.write_chunk(id, Some(&path), &bytes),
@@ -487,6 +475,7 @@ pub(crate) fn rebuild_vanilla_container(
                 .map_err(|e| format!("write m.ubulk {}: {e}", job.rel))?;
                 memory_mapped_routed += 1;
             }
+            drop(job.converted);
 
             completed += 1;
             if completed.is_multiple_of(10) || completed == zen_total {
@@ -571,7 +560,7 @@ pub(crate) fn rebuild_vanilla_container(
         },
     );
     if pak_entry_count > 0 {
-        super::super::writer::write_pak_bytes(
+        super::super::writer::write_pak_streaming(
             base_pak.to_string_lossy().as_ref(),
             pak_entries,
             Some(vanilla_oodle_level),

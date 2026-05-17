@@ -71,6 +71,37 @@ pub(super) fn write_pak_bytes(
     Ok(())
 }
 
+pub(super) fn write_pak_streaming(
+    output_pak: &str,
+    mut entries: Vec<(String, std::path::PathBuf)>,
+    oodle_level: Option<OodleCompressionLevel>,
+) -> Result<(), String> {
+    if entries.is_empty() {
+        return Err("No files provided for pak build.".to_string());
+    }
+    if let Some(parent) = Path::new(output_pak).parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let out_file = fs::File::create(output_pak).map_err(|e| e.to_string())?;
+    let mut pak_writer = pak_builder_with_level(oodle_level)?.writer(
+        BufWriter::new(out_file),
+        RIVALS_PROFILE.pak_version(),
+        RIVALS_PROFILE.mount_point().to_string(),
+        None,
+    );
+
+    for (path, source) in entries.drain(..) {
+        let bytes = fs::read(&source).map_err(|e| format!("read {}: {e}", source.display()))?;
+        pak_writer
+            .write_file(&path, true, bytes)
+            .map_err(|e| e.to_string())?;
+    }
+
+    pak_writer.write_index().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub(super) fn repack_pak(
     input_dir: &str,
     output_pak: &str,
