@@ -50,6 +50,14 @@ pub(crate) struct PakTweakEdit {
     pub engine_section: Option<String>,
 }
 
+/// Which embedded INI file the Config Tweaks page reads from and writes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PakIniTarget {
+    Engine,
+    DeviceProfiles,
+}
+
 /// Raw INI file content for writing back to a pak.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PakIniFileContent {

@@ -52,6 +52,9 @@ interface PakIniInfo {
   engine_ini_entry: string | null;
 }
 
+// Matches pak_tweaks::PakIniTarget (serde rename_all = "snake_case")
+type PakIniTarget = "engine" | "device_profiles";
+
 interface PakTweakEdit {
   key: string;
   value: string | null;
@@ -140,6 +143,7 @@ interface PakCacheEntry {
   tweakStates: TweakState[];
   savedTweakStates: TweakState[];
   edits: PakTweakEdit[];
+  iniTarget: PakIniTarget;
 }
 
 interface Props {
@@ -150,9 +154,16 @@ interface Props {
 
 const ADVANCED_CATEGORIES = new Set(["Latency"]);
 
+// DeviceProfiles overrides Engine CVars at runtime, so prefer it when present.
+function defaultIniTarget(pak: PakIniInfo): PakIniTarget {
+  return pak.has_device_profiles ? "device_profiles" : "engine";
+}
+
 export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
   const [paks, setPaks] = useState<PakIniInfo[]>([]);
   const [selectedPak, setSelectedPak] = useState<PakIniInfo | null>(null);
+  const [iniTarget, setIniTarget] = useState<PakIniTarget>("device_profiles");
+  const iniTargetRef = useRef(iniTarget);
   const [tweakStates, setTweakStates] = useState<TweakState[]>([]);
   const [savedTweakStates, setSavedTweakStates] = useState<TweakState[]>([]);
   const [edits, setEdits] = useState<PakTweakEdit[]>([]);
@@ -196,6 +207,7 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
 
   useEffect(() => {
     scanRef.current = scan;
+    iniTargetRef.current = iniTarget;
   });
   useEffect(() => {
     if (gamePath) scanRef.current(true);
@@ -661,12 +673,18 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
   async function selectPak(pak: PakIniInfo) {
     // Save current state before switching so we can restore it if user comes back
     if (selectedPak && selectedPak.pak_path !== pak.pak_path) {
-      pakCache.current.set(selectedPak.pak_path, { tweakStates, savedTweakStates, edits });
+      pakCache.current.set(selectedPak.pak_path, {
+        tweakStates,
+        savedTweakStates,
+        edits,
+        iniTarget,
+      });
     }
 
     const cached = pakCache.current.get(pak.pak_path);
     if (cached) {
       setSelectedPak(pak);
+      setIniTarget(cached.iniTarget);
       setTweakStates(cached.tweakStates);
       setSavedTweakStates(cached.savedTweakStates);
       setEdits(cached.edits);
@@ -674,7 +692,9 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
     }
 
     // Cache miss — fetch from backend, keep showing previous state during load
+    const target = defaultIniTarget(pak);
     setSelectedPak(pak);
+    setIniTarget(target);
     setLoading(true);
     try {
       const states = await invoke<TweakState[]>("detect_pak_tweaks", { pakPath: pak.pak_path });
@@ -685,6 +705,7 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
         tweakStates: states,
         savedTweakStates: states,
         edits: [],
+        iniTarget: target,
       });
     } catch (e: unknown) {
       // Clear on failure so stale state doesn't linger
@@ -715,6 +736,7 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
         tweakStates: states,
         savedTweakStates: states,
         edits: [],
+        iniTarget: iniTargetRef.current,
       });
     } catch (e: unknown) {
       if (isPakMissingError(e)) {
@@ -725,6 +747,18 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
       }
       console.error("Reload failed:", e);
     }
+  }
+
+  /** Switch which embedded INI file new edits are written to. Detection is merged,
+   *  so only the write destination (and which tweaks are editable) changes. */
+  function changeTarget(target: PakIniTarget) {
+    if (!selectedPak || target === iniTarget) return;
+    if (edits.length > 0) {
+      showNotice("Apply or discard pending changes before switching target", "info");
+      return;
+    }
+    setIniTarget(target);
+    iniTargetRef.current = target;
   }
 
   function queueEdit(
@@ -760,6 +794,7 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
       const msg = await invoke<string>("apply_pak_tweak_edits", {
         pakPath: selectedPak.pak_path,
         edits,
+        target: iniTarget,
       });
       showNotice(msg, "ok");
       emitPakChanged({ pakPath: selectedPak.pak_path, source: "PakTweaks" });
@@ -958,127 +993,164 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
             )}
           </div>
 
-          {/* Preset bar */}
+          {/* Toolbar: edit target (when both INIs exist) + presets */}
           {selectedPak && tweakStates.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card/40 px-3 py-2">
-              <div className="w-56 shrink-0">
-                {savingAs || renamingAs ? (
-                  <input
-                    autoFocus
-                    value={newPresetName}
-                    onChange={(e) => setNewPresetName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        if (renamingAs) renameSelectedPreset();
-                        else saveCurrentAsPreset();
-                      }
-                      if (e.key === "Escape") {
-                        setSavingAs(false);
-                        setRenamingAs(false);
-                        setNewPresetName("");
-                      }
-                    }}
-                    placeholder={renamingAs ? "New preset name…" : "Preset name…"}
-                    className="h-7 w-full rounded-md border border-border bg-background px-3 text-[12px] outline-none placeholder:text-muted-foreground/50 focus:border-primary"
-                  />
-                ) : (
+              {selectedPak.has_device_profiles && selectedPak.has_engine_ini && (
+                <div className="flex items-center gap-2">
+                  <Label className="shrink-0 text-[12px] font-medium text-muted-foreground">
+                    Edit target
+                  </Label>
                   <Select
-                    value={selectedPreset}
-                    onValueChange={(name) => {
-                      setSelectedPreset(name);
-                      const p = presets.find((x) => x.name === name);
-                      if (p) applyPresetToCurrentPak(p);
-                    }}
-                    disabled={presets.length === 0}
+                    value={iniTarget}
+                    onValueChange={(v) => changeTarget(v as PakIniTarget)}
+                    disabled={loading || applying}
                   >
-                    <SelectTrigger
-                      size="sm"
-                      className="w-full text-left text-[12px] [&>span]:text-left"
-                    >
-                      <SelectValue
-                        placeholder={presets.length === 0 ? "No saved presets" : "Choose preset…"}
-                      />
+                    <SelectTrigger size="sm" className="w-56 text-[12px]">
+                      <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {presets.map((p) => (
-                        <SelectItem key={p.name} value={p.name}>
-                          {p.name}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="device_profiles">DefaultDeviceProfiles.ini</SelectItem>
+                      <SelectItem value="engine">DefaultEngine.ini</SelectItem>
                     </SelectContent>
                   </Select>
+                  <Tip
+                    content={
+                      <span className="block break-normal">
+                        Toggles write to this file. DeviceProfiles overrides Engine at runtime; an
+                        edited key already present in the other file is kept in sync.
+                      </span>
+                    }
+                  >
+                    <Info size={14} className="shrink-0 text-muted-foreground/70" />
+                  </Tip>
+                  <span className="mx-1 h-4 w-px bg-border/60" />
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Label className="shrink-0 text-[12px] font-medium text-muted-foreground">
+                  Preset
+                </Label>
+                <div className="w-56 shrink-0">
+                  {savingAs || renamingAs ? (
+                    <input
+                      autoFocus
+                      value={newPresetName}
+                      onChange={(e) => setNewPresetName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          if (renamingAs) renameSelectedPreset();
+                          else saveCurrentAsPreset();
+                        }
+                        if (e.key === "Escape") {
+                          setSavingAs(false);
+                          setRenamingAs(false);
+                          setNewPresetName("");
+                        }
+                      }}
+                      placeholder={renamingAs ? "New preset name…" : "Preset name…"}
+                      className="h-7 w-full rounded-md border border-border bg-background px-3 text-[12px] outline-none placeholder:text-muted-foreground/50 focus:border-primary"
+                    />
+                  ) : (
+                    <Select
+                      value={selectedPreset}
+                      onValueChange={(name) => {
+                        setSelectedPreset(name);
+                        const p = presets.find((x) => x.name === name);
+                        if (p) applyPresetToCurrentPak(p);
+                      }}
+                      disabled={presets.length === 0}
+                    >
+                      <SelectTrigger
+                        size="sm"
+                        className="w-full text-left text-[12px] [&>span]:text-left"
+                      >
+                        <SelectValue
+                          placeholder={presets.length === 0 ? "No saved presets" : "Choose preset…"}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {presets.map((p) => (
+                          <SelectItem key={p.name} value={p.name}>
+                            {p.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+                {savingAs || renamingAs ? (
+                  <>
+                    <Tip content="Save (Enter)">
+                      <Button
+                        variant="blue"
+                        size="icon-sm"
+                        onClick={renamingAs ? renameSelectedPreset : saveCurrentAsPreset}
+                        disabled={
+                          !newPresetName.trim() ||
+                          (renamingAs && newPresetName.trim() === selectedPreset)
+                        }
+                      >
+                        <Save size={13} />
+                      </Button>
+                    </Tip>
+                    <Tip content="Cancel (Esc)">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => {
+                          setSavingAs(false);
+                          setRenamingAs(false);
+                          setNewPresetName("");
+                        }}
+                      >
+                        <X size={13} />
+                      </Button>
+                    </Tip>
+                  </>
+                ) : (
+                  <>
+                    {selectedPreset && (
+                      <>
+                        <Tip content="Save current tweaks into this preset">
+                          <Button variant="ghost" size="icon-sm" onClick={overwriteSelectedPreset}>
+                            <Save size={13} />
+                          </Button>
+                        </Tip>
+                        <Tip content="Rename this preset">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => {
+                              setNewPresetName(selectedPreset);
+                              setRenamingAs(true);
+                            }}
+                          >
+                            <Pencil size={13} />
+                          </Button>
+                        </Tip>
+                        <Tip content="Delete this preset">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="text-destructive hover:bg-destructive/15 hover:text-destructive"
+                            onClick={deleteSelectedPreset}
+                          >
+                            <Trash2 size={13} />
+                          </Button>
+                        </Tip>
+                        <span className="mx-1 h-4 w-px bg-border/60" />
+                      </>
+                    )}
+                    <Tip content="Save current tweaks as new preset">
+                      <Button variant="ghost" size="icon-sm" onClick={() => setSavingAs(true)}>
+                        <Plus size={13} />
+                      </Button>
+                    </Tip>
+                  </>
                 )}
               </div>
-              {savingAs || renamingAs ? (
-                <>
-                  <Tip content="Save (Enter)">
-                    <Button
-                      variant="blue"
-                      size="icon-sm"
-                      onClick={renamingAs ? renameSelectedPreset : saveCurrentAsPreset}
-                      disabled={
-                        !newPresetName.trim() ||
-                        (renamingAs && newPresetName.trim() === selectedPreset)
-                      }
-                    >
-                      <Save size={13} />
-                    </Button>
-                  </Tip>
-                  <Tip content="Cancel (Esc)">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => {
-                        setSavingAs(false);
-                        setRenamingAs(false);
-                        setNewPresetName("");
-                      }}
-                    >
-                      <X size={13} />
-                    </Button>
-                  </Tip>
-                </>
-              ) : (
-                <>
-                  {selectedPreset && (
-                    <>
-                      <Tip content="Save current tweaks into this preset">
-                        <Button variant="ghost" size="icon-sm" onClick={overwriteSelectedPreset}>
-                          <Save size={13} />
-                        </Button>
-                      </Tip>
-                      <Tip content="Rename this preset">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => {
-                            setNewPresetName(selectedPreset);
-                            setRenamingAs(true);
-                          }}
-                        >
-                          <Pencil size={13} />
-                        </Button>
-                      </Tip>
-                      <Tip content="Delete this preset">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          className="text-destructive hover:bg-destructive/15 hover:text-destructive"
-                          onClick={deleteSelectedPreset}
-                        >
-                          <Trash2 size={13} />
-                        </Button>
-                      </Tip>
-                      <span className="mx-1 h-4 w-px bg-border/60" />
-                    </>
-                  )}
-                  <Tip content="Save current tweaks as new preset">
-                    <Button variant="ghost" size="icon-sm" onClick={() => setSavingAs(true)}>
-                      <Plus size={13} />
-                    </Button>
-                  </Tip>
-                </>
-              )}
             </div>
           )}
 
@@ -1132,7 +1204,12 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                             savedTweakStates.find((s) => s.id === tweak.id)?.active ?? false;
                           if (removeOnly && isSavedEnabled) return null;
                           const needsEngine = engineOnly && !selectedPak.has_engine_ini;
-                          const disabled = needsEngine;
+                          // Engine-section settings can't live in DefaultDeviceProfiles.ini.
+                          const blockedByTarget =
+                            engineOnly &&
+                            iniTarget === "device_profiles" &&
+                            selectedPak.has_engine_ini;
+                          const disabled = needsEngine || blockedByTarget;
                           const conflict = hasScalabilityConflict(tweak);
                           return (
                             <QuickTweakRow
@@ -1142,7 +1219,9 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                               disabledReason={
                                 needsEngine
                                   ? "Requires DefaultEngine.ini in this pak mod"
-                                  : undefined
+                                  : blockedByTarget
+                                    ? "Needs an Engine.ini section — switch Edit target to DefaultEngine.ini"
+                                    : undefined
                               }
                               scalabilityConflict={conflict}
                               currentValue={

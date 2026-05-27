@@ -191,8 +191,20 @@ fn apply_device_profiles_edits(lines: &mut Vec<String>, edits: &[PakTweakEdit]) 
         }
     }
 
-    let Some(start) = section_start else {
-        return;
+    // No section yet: create it so value inserts land somewhere. Skip when there's
+    // nothing to insert (pure removals) to avoid leaving an empty section behind.
+    let start = match section_start {
+        Some(start) => start,
+        None => {
+            if !edits.iter().any(|e| e.value.is_some()) {
+                return;
+            }
+            if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push("[Windows DeviceProfile]".to_string());
+            lines.len() - 1
+        }
     };
     let end = section_end.unwrap_or(lines.len());
 
@@ -333,10 +345,11 @@ mod roundtrip_tests {
     //! apply the edits like apply_pak_tweaks does, then run detect_tweaks_unscoped
     //! against the merged result. Catches regressions in detection vs apply drift.
     use super::*;
-    use crate::pak_tweaks::PakTweakEdit;
+    use crate::pak_tweaks::{PakIniTarget, PakTweakEdit};
     use crate::tweaks::TweakState;
     use crate::tweaks::catalogue::{TweakDefinition, TweakKind, tweak_catalogue};
     use crate::tweaks::detect_tweaks_unscoped;
+    use std::collections::HashSet;
 
     /// Mirrors the frontend `toggleQuickTweak` logic for the ON case.
     fn edits_for_on(def: &TweakDefinition) -> Vec<PakTweakEdit> {
@@ -401,36 +414,64 @@ mod roundtrip_tests {
         }
     }
 
-    /// Apply edits to engine+dp content following the same partition logic the
-    /// backend uses in `apply_device_profiles_edits`.
-    fn apply_to_pair(engine: &str, dp: &str, edits: &[PakTweakEdit]) -> (String, String) {
-        let (engine_edits, dp_edits): (Vec<_>, Vec<_>) = edits
+    /// Apply edits to engine+dp content mirroring `apply_pak_tweaks`: plain CVar edits
+    /// go to `target`, engine-section settings always go to Engine, and an existing copy
+    /// of an edited key in the sibling file is kept in sync (never injected).
+    fn apply_to_pair(
+        engine: &str,
+        dp: &str,
+        edits: &[PakTweakEdit],
+        target: PakIniTarget,
+    ) -> (String, String) {
+        let (engine_section_edits, plain_edits): (Vec<_>, Vec<_>) = edits
             .iter()
             .cloned()
-            .partition(|e| e.engine_section.is_some() && e.value.is_some());
+            .partition(|e| e.engine_section.is_some());
 
-        let dp_after = apply_edits_to_ini(dp, &dp_edits, IniType::DeviceProfiles);
+        let mut engine_after = engine.to_string();
+        let mut dp_after = dp.to_string();
 
-        // Mirror remove-edits to engine.ini so stale keys don't shadow.
-        let remove_edits: Vec<PakTweakEdit> = edits
-            .iter()
-            .filter(|e| e.value.is_none())
-            .cloned()
-            .collect();
-        let mut engine_full = engine_edits;
-        for r in remove_edits {
-            if !engine_full
-                .iter()
-                .any(|e| e.key.eq_ignore_ascii_case(&r.key))
-            {
-                engine_full.push(r);
+        // Plain CVar edits -> the chosen target file.
+        match target {
+            PakIniTarget::Engine => {
+                engine_after = apply_edits_to_ini(&engine_after, &plain_edits, IniType::Engine);
+            }
+            PakIniTarget::DeviceProfiles => {
+                dp_after = apply_edits_to_ini(&dp_after, &plain_edits, IniType::DeviceProfiles);
             }
         }
-        let engine_after = if !engine_full.is_empty() {
-            apply_edits_to_ini(engine, &engine_full, IniType::Engine)
+
+        // Engine-section settings are not console variables; they only live in Engine.ini.
+        if !engine_section_edits.is_empty() {
+            engine_after =
+                apply_edits_to_ini(&engine_after, &engine_section_edits, IniType::Engine);
+        }
+
+        // Keep an existing copy of each edited CVar consistent in the sibling file.
+        let sibling_is_engine = matches!(target, PakIniTarget::DeviceProfiles);
+        let (sibling_content, sibling_label, sibling_type) = if sibling_is_engine {
+            (&engine_after, "DefaultEngine.ini", IniType::Engine)
         } else {
-            engine.to_string()
+            (
+                &dp_after,
+                "DefaultDeviceProfiles.ini",
+                IniType::DeviceProfiles,
+            )
         };
+        let present: HashSet<String> = parse_console_vars(sibling_content, sibling_label)
+            .into_iter()
+            .map(|s| s.key.to_ascii_lowercase())
+            .collect();
+        let filtered: Vec<PakTweakEdit> = plain_edits
+            .iter()
+            .filter(|e| present.contains(&e.key.to_ascii_lowercase()))
+            .cloned()
+            .collect();
+        if sibling_is_engine {
+            engine_after = apply_edits_to_ini(&engine_after, &filtered, sibling_type);
+        } else {
+            dp_after = apply_edits_to_ini(&dp_after, &filtered, sibling_type);
+        }
 
         (engine_after, dp_after)
     }
@@ -480,7 +521,7 @@ mod roundtrip_tests {
 
         // Apply ON.
         let edits = edits_for_on(def);
-        let (engine_on, dp_on) = apply_to_pair(engine, dp, &edits);
+        let (engine_on, dp_on) = apply_to_pair(engine, dp, &edits, PakIniTarget::DeviceProfiles);
 
         // After ON: PostProcessing.DisableMaterials and LightTile.Enable removed,
         // CustomDepth replaced with 3.
@@ -503,7 +544,7 @@ mod roundtrip_tests {
         let dp = "[Windows DeviceProfile]\n";
 
         let edits = edits_for_on(def);
-        let (engine_on, dp_on) = apply_to_pair(engine, dp, &edits);
+        let (engine_on, dp_on) = apply_to_pair(engine, dp, &edits, PakIniTarget::DeviceProfiles);
 
         let detect_on = detect_tweaks_unscoped(&merge_to_synthetic(&engine_on, &dp_on));
         assert!(
@@ -532,7 +573,7 @@ mod roundtrip_tests {
         let dp = "[Windows DeviceProfile]\n";
 
         let edits = edits_for_on(def);
-        let (engine_on, dp_on) = apply_to_pair(engine, dp, &edits);
+        let (engine_on, dp_on) = apply_to_pair(engine, dp, &edits, PakIniTarget::DeviceProfiles);
 
         let detect_on = detect_tweaks_unscoped(&merge_to_synthetic(&engine_on, &dp_on));
         assert!(
@@ -560,23 +601,131 @@ mod roundtrip_tests {
         }
         let dp = String::from("[Windows DeviceProfile]\n");
 
-        for def in cat.iter() {
-            // Skip pak-only=false tweaks that target Scalability sections only;
-            // they still flow through pak path as the frontend allows.
-            // (Detection happens against the full catalogue regardless.)
-            let edits = edits_for_on(def);
-            if edits.is_empty() {
-                continue;
+        // Both edit targets must round-trip to ACTIVE: the merged runtime view is the
+        // same regardless of which file holds the CVar.
+        for target in [PakIniTarget::DeviceProfiles, PakIniTarget::Engine] {
+            for def in cat.iter() {
+                let edits = edits_for_on(def);
+                if edits.is_empty() {
+                    continue;
+                }
+                let (engine_after, dp_after) = apply_to_pair(&engine, &dp, &edits, target);
+                let states = detect_tweaks_unscoped(&merge_to_synthetic(&engine_after, &dp_after));
+                let state = state_for(&states, &def.id);
+                assert!(
+                    state.active,
+                    "tweak {} should detect ACTIVE after applying ON edits (target={:?}, kind={:?})",
+                    def.id,
+                    target,
+                    std::mem::discriminant(&def.kind)
+                );
             }
-            let (engine_after, dp_after) = apply_to_pair(&engine, &dp, &edits);
-            let states = detect_tweaks_unscoped(&merge_to_synthetic(&engine_after, &dp_after));
-            let state = state_for(&states, &def.id);
-            assert!(
-                state.active,
-                "tweak {} should detect ACTIVE after applying ON edits (kind={:?})",
-                def.id,
-                std::mem::discriminant(&def.kind)
-            );
         }
+    }
+
+    fn cvar_edit(key: &str, value: Option<&str>) -> PakTweakEdit {
+        PakTweakEdit {
+            key: key.into(),
+            value: value.map(str::to_string),
+            engine_section: None,
+        }
+    }
+
+    #[test]
+    fn target_engine_syncs_existing_key_in_device_profiles() {
+        let engine = "[ConsoleVariables]\nr.Foo=0\n";
+        let dp = "[Windows DeviceProfile]\n+CVars=r.Foo=0\n";
+        let (engine_after, dp_after) = apply_to_pair(
+            engine,
+            dp,
+            &[cvar_edit("r.Foo", Some("1"))],
+            PakIniTarget::Engine,
+        );
+        assert!(
+            engine_after.contains("r.Foo=1"),
+            "engine target:\n{engine_after}"
+        );
+        assert!(
+            dp_after.contains("+CVars=r.Foo=1"),
+            "sibling DeviceProfiles copy should update so it doesn't shadow:\n{dp_after}"
+        );
+    }
+
+    #[test]
+    fn target_device_profiles_syncs_existing_key_in_engine() {
+        let engine = "[ConsoleVariables]\nr.Foo=0\n";
+        let dp = "[Windows DeviceProfile]\n+CVars=r.Foo=0\n";
+        let (engine_after, dp_after) = apply_to_pair(
+            engine,
+            dp,
+            &[cvar_edit("r.Foo", Some("1"))],
+            PakIniTarget::DeviceProfiles,
+        );
+        assert!(
+            dp_after.contains("+CVars=r.Foo=1"),
+            "dp target:\n{dp_after}"
+        );
+        assert!(
+            engine_after.contains("r.Foo=1"),
+            "sibling Engine copy should stay consistent:\n{engine_after}"
+        );
+    }
+
+    #[test]
+    fn removal_clears_key_from_both_files() {
+        let engine = "[ConsoleVariables]\nr.Foo=0\n";
+        let dp = "[Windows DeviceProfile]\n+CVars=r.Foo=0\n";
+        let (engine_after, dp_after) = apply_to_pair(
+            engine,
+            dp,
+            &[cvar_edit("r.Foo", None)],
+            PakIniTarget::DeviceProfiles,
+        );
+        assert!(
+            !engine_after.to_ascii_lowercase().contains("r.foo"),
+            "engine copy should be removed for a true reset:\n{engine_after}"
+        );
+        assert!(
+            !dp_after.to_ascii_lowercase().contains("r.foo"),
+            "dp copy should be removed:\n{dp_after}"
+        );
+    }
+
+    #[test]
+    fn sibling_without_key_is_not_injected() {
+        let engine = "[ConsoleVariables]\n";
+        let dp = "[Windows DeviceProfile]\n";
+        let (engine_after, dp_after) = apply_to_pair(
+            engine,
+            dp,
+            &[cvar_edit("r.Foo", Some("1"))],
+            PakIniTarget::DeviceProfiles,
+        );
+        assert!(
+            dp_after.contains("+CVars=r.Foo=1"),
+            "target dp gets the key:\n{dp_after}"
+        );
+        assert!(
+            !engine_after.to_ascii_lowercase().contains("r.foo"),
+            "engine never had the key, so it must not be injected:\n{engine_after}"
+        );
+    }
+
+    #[test]
+    fn device_profiles_section_created_when_missing() {
+        let dp = "; device profiles file with no windows section\n";
+        let out = apply_edits_to_ini(
+            dp,
+            &[cvar_edit("r.Foo", Some("1"))],
+            IniType::DeviceProfiles,
+        );
+        assert!(
+            out.contains("[Windows DeviceProfile]"),
+            "missing section should be created:\n{out}"
+        );
+        assert!(
+            out.contains("+CVars=r.Foo=1"),
+            "cvar should be inserted:\n{out}"
+        );
     }
 }

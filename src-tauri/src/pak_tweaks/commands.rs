@@ -3,7 +3,7 @@
 use tauri::State;
 
 use crate::pak_tweaks;
-use crate::pak_tweaks::{PakIniFileContent, PakIniInfo, PakIniListing, PakTweakEdit};
+use crate::pak_tweaks::{PakIniFileContent, PakIniInfo, PakIniListing, PakIniTarget, PakTweakEdit};
 use crate::settings::{SettingsState, recursive_mod_scan};
 use crate::tweaks::TweakState;
 
@@ -58,13 +58,16 @@ pub(crate) async fn detect_pak_tweaks(pak_path: String) -> Result<Vec<TweakState
 pub(crate) async fn apply_pak_tweak_edits(
     pak_path: String,
     edits: Vec<PakTweakEdit>,
+    target: Option<PakIniTarget>,
 ) -> Result<String, String> {
     if crate::game_status::should_block_for_game() {
         return Err(crate::game_status::game_running_error());
     }
-    tauri::async_runtime::spawn_blocking(move || pak_tweaks::apply_pak_tweaks(&pak_path, &edits))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        pak_tweaks::apply_pak_tweaks(&pak_path, &edits, target)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

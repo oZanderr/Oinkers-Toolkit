@@ -69,7 +69,8 @@ pub(crate) fn scan_mod_paks_any_ini(
 
 /// Read CVar values from pak INI files.
 ///
-/// If both Engine and DeviceProfiles are present, DeviceProfiles overrides shared keys.
+/// Both files are merged with DeviceProfiles overriding shared keys, so the result
+/// reflects the true runtime state regardless of which file the user edits.
 pub(crate) fn read_pak_tweaks(pak_path: &str) -> Result<Vec<PakTweakState>, String> {
     let pak_path = Path::new(pak_path);
     let info = inspect_pak_for_ini(pak_path)?
