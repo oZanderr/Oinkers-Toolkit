@@ -67,34 +67,36 @@ pub(crate) fn scan_mod_paks_any_ini(
     Ok(results)
 }
 
-/// Read CVar values from pak INI files.
-///
-/// Both files are merged with DeviceProfiles overriding shared keys, so the result
-/// reflects the true runtime state regardless of which file the user edits.
+/// Read CVar values from pak INI files, merged in runtime priority order (lowest first,
+/// highest overrides): BaseEngine, DefaultEngine, WindowsEngine, DeviceProfiles. The map
+/// is keyed by lowercased CVar name so insert is O(1); a Vec/retain merge here was O(N^2)
+/// and stalled multi-second on mod paks with full engine INI overrides.
 pub(crate) fn read_pak_tweaks(pak_path: &str) -> Result<Vec<PakTweakState>, String> {
     let pak_path = Path::new(pak_path);
     let info = inspect_pak_for_ini(pak_path)?
         .ok_or_else(|| "No INI config files found in this pak.".to_string())?;
 
-    let mut merged: Vec<PakTweakState> = if let Some(ref eng) = info.engine_ini_entry {
-        let content = extract_file_to_string(pak_path, eng)?;
-        parse_console_vars(&content, "DefaultEngine.ini")
-    } else {
-        Vec::new()
-    };
+    let layers: [(Option<&String>, &str); 4] = [
+        (info.base_engine_entry.as_ref(), "BaseEngine.ini"),
+        (info.engine_ini_entry.as_ref(), "DefaultEngine.ini"),
+        (info.windows_engine_entry.as_ref(), "WindowsEngine.ini"),
+        (
+            info.device_profiles_entry.as_ref(),
+            "DefaultDeviceProfiles.ini",
+        ),
+    ];
 
-    if let Some(ref dp) = info.device_profiles_entry {
-        let content = extract_file_to_string(pak_path, dp)?;
-        let dp_vars = parse_console_vars(&content, "DefaultDeviceProfiles.ini");
-
-        for dp_var in dp_vars {
-            let key_lower = dp_var.key.to_ascii_lowercase();
-            merged.retain(|v| v.key.to_ascii_lowercase() != key_lower);
-            merged.push(dp_var);
+    let mut merged: std::collections::HashMap<String, PakTweakState> =
+        std::collections::HashMap::new();
+    for (entry, label) in layers {
+        let Some(entry) = entry else { continue };
+        let content = extract_file_to_string(pak_path, entry)?;
+        for var in parse_console_vars(&content, label) {
+            merged.insert(var.key.to_ascii_lowercase(), var);
         }
     }
 
-    Ok(merged)
+    Ok(merged.into_values().collect())
 }
 
 /// Detect active tweaks from pak INI content using the shared tweak detector.

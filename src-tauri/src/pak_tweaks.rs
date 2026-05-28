@@ -1,4 +1,4 @@
-//! Pak INI editor: inspect, detect, and edit DefaultEngine.ini and DefaultDeviceProfiles.ini embedded in mod paks.
+//! Pak INI editor: inspect, detect, and edit BaseEngine.ini / DefaultEngine.ini / WindowsEngine.ini / DefaultDeviceProfiles.ini embedded in mod paks.
 
 mod apply;
 pub(crate) mod commands;
@@ -15,14 +15,21 @@ pub(crate) use scan::{
 };
 
 /// INI entries discovered in a pak mod for the curated tweak workflow (Config Tweaks).
+///
+/// Runtime priority for shared keys (highest wins): DeviceProfiles > WindowsEngine >
+/// DefaultEngine > BaseEngine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PakIniInfo {
     pub pak_name: String,
     pub pak_path: String,
     pub has_device_profiles: bool,
     pub has_engine_ini: bool,
+    pub has_base_engine: bool,
+    pub has_windows_engine: bool,
     pub device_profiles_entry: Option<String>,
     pub engine_ini_entry: Option<String>,
+    pub base_engine_entry: Option<String>,
+    pub windows_engine_entry: Option<String>,
 }
 
 /// Any-INI listing for paks shown in the Pak INI Editor tab.
@@ -51,10 +58,15 @@ pub(crate) struct PakTweakEdit {
 }
 
 /// Which embedded INI file the Config Tweaks page reads from and writes to.
+///
+/// `Engine` is DefaultEngine.ini (the legacy default). `BaseEngine` and `WindowsEngine`
+/// are added later; the variant name `Engine` is kept for wire-protocol compatibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PakIniTarget {
+    BaseEngine,
     Engine,
+    WindowsEngine,
     DeviceProfiles,
 }
 

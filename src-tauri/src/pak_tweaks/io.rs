@@ -45,6 +45,8 @@ pub(super) fn inspect_pak_for_ini(pak_path: &Path) -> Result<Option<PakIniInfo>,
 
     let mut device_profiles_entry = None;
     let mut engine_ini_entry = None;
+    let mut base_engine_entry = None;
+    let mut windows_engine_entry = None;
 
     for f in &files {
         let lower = f.to_ascii_lowercase();
@@ -52,10 +54,18 @@ pub(super) fn inspect_pak_for_ini(pak_path: &Path) -> Result<Option<PakIniInfo>,
             device_profiles_entry = Some(f.clone());
         } else if lower.ends_with("defaultengine.ini") {
             engine_ini_entry = Some(f.clone());
+        } else if lower.ends_with("baseengine.ini") {
+            base_engine_entry = Some(f.clone());
+        } else if lower.ends_with("windowsengine.ini") {
+            windows_engine_entry = Some(f.clone());
         }
     }
 
-    if device_profiles_entry.is_none() && engine_ini_entry.is_none() {
+    if device_profiles_entry.is_none()
+        && engine_ini_entry.is_none()
+        && base_engine_entry.is_none()
+        && windows_engine_entry.is_none()
+    {
         return Ok(None);
     }
 
@@ -70,8 +80,12 @@ pub(super) fn inspect_pak_for_ini(pak_path: &Path) -> Result<Option<PakIniInfo>,
         pak_path: pak_path.to_string_lossy().into_owned(),
         has_device_profiles: device_profiles_entry.is_some(),
         has_engine_ini: engine_ini_entry.is_some(),
+        has_base_engine: base_engine_entry.is_some(),
+        has_windows_engine: windows_engine_entry.is_some(),
         device_profiles_entry,
         engine_ini_entry,
+        base_engine_entry,
+        windows_engine_entry,
     }))
 }
 

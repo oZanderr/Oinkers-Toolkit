@@ -10,13 +10,21 @@ use super::cvars::{IniType, apply_edits_to_ini, parse_console_vars};
 use super::io::{inspect_pak_for_ini, with_unpacked_pak};
 use super::{PakIniFileContent, PakIniInfo, PakIniTarget, PakTweakEdit};
 
+/// Engine-file targets in runtime priority order, lowest first.
+const ENGINE_TARGETS: [PakIniTarget; 3] = [
+    PakIniTarget::BaseEngine,
+    PakIniTarget::Engine,
+    PakIniTarget::WindowsEngine,
+];
+
 /// Apply catalogue-driven edits to a pak's chosen INI file and repack in place.
 ///
-/// All plain CVar edits are written to `target` (defaulting to DeviceProfiles when
-/// present, else Engine). Engine-section settings can only live in Engine.ini, so
-/// they always go there. An existing copy of an edited key in the sibling file is
-/// kept in sync so neither file shadows the other; keys absent from the sibling are
-/// never injected.
+/// Plain CVar edits are written to `target` (defaulting to the highest-priority file
+/// present in the pak). Engine-section settings are not console variables and only
+/// belong in an engine file: they go to `target` when it is an engine file, else to
+/// the highest-priority engine file present. Every other file that already contains
+/// an edited key is kept in sync so no higher-priority file shadows the user's edit;
+/// keys absent from a file are never injected into it.
 pub(crate) fn apply_pak_tweaks(
     pak_path: &str,
     edits: &[PakTweakEdit],
@@ -29,11 +37,15 @@ pub(crate) fn apply_pak_tweaks(
     let edit_count = edits.len();
 
     let resolved = resolve_target(&info, target)?;
-    let sibling = sibling_of(resolved);
+    // Engine-section edits need an engine file. Prefer the user's target if it's an
+    // engine file; otherwise the highest-priority engine file present.
+    let engine_section_target = if is_engine(resolved) {
+        Some(resolved)
+    } else {
+        highest_engine_present(&info)
+    };
 
     with_unpacked_pak(pak, |temp_dir| {
-        // Engine-section settings (e.g. ApplicationScale, MaxClientRate) are not
-        // console variables and can only live in Engine.ini.
         let (engine_section_edits, plain_edits): (Vec<PakTweakEdit>, Vec<PakTweakEdit>) = edits
             .iter()
             .cloned()
@@ -44,20 +56,42 @@ pub(crate) fn apply_pak_tweaks(
         apply_edits_to_file(temp_dir, target_entry, ini_type_for(resolved), &plain_edits)?;
 
         if !engine_section_edits.is_empty()
-            && let Some(eng_entry) = info.engine_ini_entry.as_ref()
+            && let Some(eng_target) = engine_section_target
+            && let Some(eng_entry) = entry_for(&info, eng_target)
         {
             apply_edits_to_file(temp_dir, eng_entry, IniType::Engine, &engine_section_edits)?;
         }
 
-        // Keep an existing copy of each edited CVar consistent in the sibling file.
-        if let Some(sib_entry) = entry_for(&info, sibling) {
-            sync_existing_keys(
-                temp_dir,
-                sib_entry,
-                ini_type_for(sibling),
-                source_label(sibling),
-                &plain_edits,
-            )?;
+        // Sync every other file that already contains a plain-edited key. Plain
+        // edits and engine_section edits never collide on the same key, so the
+        // engine_section_target file is still a valid sibling for plain edits.
+        for sibling in all_targets().into_iter().filter(|t| *t != resolved) {
+            if let Some(sib_entry) = entry_for(&info, sibling) {
+                sync_existing_keys(
+                    temp_dir,
+                    sib_entry,
+                    ini_type_for(sibling),
+                    source_label(sibling),
+                    &plain_edits,
+                )?;
+            }
+        }
+
+        // Engine-section edits also need sibling sync across the other engine files.
+        if !engine_section_edits.is_empty()
+            && let Some(eng_target) = engine_section_target
+        {
+            for sibling in ENGINE_TARGETS.iter().copied().filter(|t| *t != eng_target) {
+                if let Some(sib_entry) = entry_for(&info, sibling) {
+                    sync_existing_keys(
+                        temp_dir,
+                        sib_entry,
+                        IniType::Engine,
+                        source_label(sibling),
+                        &engine_section_edits,
+                    )?;
+                }
+            }
         }
 
         Ok(())
@@ -68,46 +102,66 @@ pub(crate) fn apply_pak_tweaks(
 }
 
 /// Resolve the requested target to one the pak actually contains, falling back to
-/// DeviceProfiles when present (it overrides Engine CVars at runtime), else Engine.
+/// the highest-priority file present (DeviceProfiles > WindowsEngine > DefaultEngine
+/// > BaseEngine) so a new edit takes effect without being shadowed.
 fn resolve_target(info: &PakIniInfo, target: Option<PakIniTarget>) -> Result<PakIniTarget, String> {
-    let requested_present = matches!(
-        target,
-        Some(PakIniTarget::Engine) if info.has_engine_ini
-    ) || matches!(
-        target,
-        Some(PakIniTarget::DeviceProfiles) if info.has_device_profiles
-    );
     if let Some(t) = target
-        && requested_present
+        && entry_for(info, t).is_some()
     {
         return Ok(t);
     }
-    if info.has_device_profiles {
-        Ok(PakIniTarget::DeviceProfiles)
-    } else if info.has_engine_ini {
-        Ok(PakIniTarget::Engine)
-    } else {
-        Err("No INI config files found in this pak.".to_string())
+    // Highest-priority first.
+    for candidate in [
+        PakIniTarget::DeviceProfiles,
+        PakIniTarget::WindowsEngine,
+        PakIniTarget::Engine,
+        PakIniTarget::BaseEngine,
+    ] {
+        if entry_for(info, candidate).is_some() {
+            return Ok(candidate);
+        }
     }
+    Err("No INI config files found in this pak.".to_string())
 }
 
-fn sibling_of(target: PakIniTarget) -> PakIniTarget {
-    match target {
-        PakIniTarget::Engine => PakIniTarget::DeviceProfiles,
-        PakIniTarget::DeviceProfiles => PakIniTarget::Engine,
-    }
+fn all_targets() -> [PakIniTarget; 4] {
+    [
+        PakIniTarget::BaseEngine,
+        PakIniTarget::Engine,
+        PakIniTarget::WindowsEngine,
+        PakIniTarget::DeviceProfiles,
+    ]
+}
+
+fn is_engine(target: PakIniTarget) -> bool {
+    !matches!(target, PakIniTarget::DeviceProfiles)
+}
+
+/// Highest-priority engine file actually present in the pak.
+fn highest_engine_present(info: &PakIniInfo) -> Option<PakIniTarget> {
+    [
+        PakIniTarget::WindowsEngine,
+        PakIniTarget::Engine,
+        PakIniTarget::BaseEngine,
+    ]
+    .into_iter()
+    .find(|&candidate| entry_for(info, candidate).is_some())
 }
 
 fn entry_for(info: &PakIniInfo, target: PakIniTarget) -> Option<&String> {
     match target {
+        PakIniTarget::BaseEngine => info.base_engine_entry.as_ref(),
         PakIniTarget::Engine => info.engine_ini_entry.as_ref(),
+        PakIniTarget::WindowsEngine => info.windows_engine_entry.as_ref(),
         PakIniTarget::DeviceProfiles => info.device_profiles_entry.as_ref(),
     }
 }
 
 fn ini_type_for(target: PakIniTarget) -> IniType {
     match target {
-        PakIniTarget::Engine => IniType::Engine,
+        PakIniTarget::BaseEngine | PakIniTarget::Engine | PakIniTarget::WindowsEngine => {
+            IniType::Engine
+        }
         PakIniTarget::DeviceProfiles => IniType::DeviceProfiles,
     }
 }
@@ -116,7 +170,9 @@ fn ini_type_for(target: PakIniTarget) -> IniType {
 /// contains "DeviceProfiles", so the label must reflect the file kind.
 fn source_label(target: PakIniTarget) -> &'static str {
     match target {
+        PakIniTarget::BaseEngine => "BaseEngine.ini",
         PakIniTarget::Engine => "DefaultEngine.ini",
+        PakIniTarget::WindowsEngine => "WindowsEngine.ini",
         PakIniTarget::DeviceProfiles => "DefaultDeviceProfiles.ini",
     }
 }

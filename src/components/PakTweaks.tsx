@@ -48,12 +48,17 @@ interface PakIniInfo {
   pak_path: string;
   has_device_profiles: boolean;
   has_engine_ini: boolean;
+  has_base_engine: boolean;
+  has_windows_engine: boolean;
   device_profiles_entry: string | null;
   engine_ini_entry: string | null;
+  base_engine_entry: string | null;
+  windows_engine_entry: string | null;
 }
 
-// Matches pak_tweaks::PakIniTarget (serde rename_all = "snake_case")
-type PakIniTarget = "engine" | "device_profiles";
+// Matches pak_tweaks::PakIniTarget (serde rename_all = "snake_case").
+// Runtime priority for shared keys: device_profiles > windows_engine > engine > base_engine.
+type PakIniTarget = "base_engine" | "engine" | "windows_engine" | "device_profiles";
 
 interface PakTweakEdit {
   key: string;
@@ -154,10 +159,41 @@ interface Props {
 
 const ADVANCED_CATEGORIES = new Set(["Latency"]);
 
-// DeviceProfiles overrides Engine CVars at runtime, so prefer it when present.
+// Default target = highest-priority file present, so a brand-new edit takes effect
+// at runtime without being shadowed.
 function defaultIniTarget(pak: PakIniInfo): PakIniTarget {
-  return pak.has_device_profiles ? "device_profiles" : "engine";
+  if (pak.has_device_profiles) return "device_profiles";
+  if (pak.has_windows_engine) return "windows_engine";
+  if (pak.has_engine_ini) return "engine";
+  return "base_engine";
 }
+
+function hasAnyEngine(pak: PakIniInfo): boolean {
+  return pak.has_engine_ini || pak.has_base_engine || pak.has_windows_engine;
+}
+
+function presentTargetCount(pak: PakIniInfo): number {
+  return (
+    Number(pak.has_base_engine) +
+    Number(pak.has_engine_ini) +
+    Number(pak.has_windows_engine) +
+    Number(pak.has_device_profiles)
+  );
+}
+
+const TARGET_LABEL: Record<PakIniTarget, string> = {
+  base_engine: "BaseEngine.ini",
+  engine: "DefaultEngine.ini",
+  windows_engine: "WindowsEngine.ini",
+  device_profiles: "DefaultDeviceProfiles.ini",
+};
+
+const TARGET_BADGE: Record<PakIniTarget, string> = {
+  base_engine: "BaseEngine",
+  engine: "Engine",
+  windows_engine: "WindowsEngine",
+  device_profiles: "DeviceProfiles",
+};
 
 export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
   const [paks, setPaks] = useState<PakIniInfo[]>([]);
@@ -967,16 +1003,31 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                         {pak.pak_name}
                       </span>
                       <div className="flex shrink-0 gap-1">
-                        {pak.has_device_profiles && (
-                          <Badge variant="outline" className="text-[10px] px-2 py-0.5">
-                            DeviceProfiles
-                          </Badge>
-                        )}
-                        {pak.has_engine_ini && (
-                          <Badge variant="outline" className="text-[10px] px-2 py-0.5">
-                            Engine
-                          </Badge>
-                        )}
+                        {(
+                          [
+                            "device_profiles",
+                            "windows_engine",
+                            "engine",
+                            "base_engine",
+                          ] as PakIniTarget[]
+                        )
+                          .filter((t) => {
+                            switch (t) {
+                              case "device_profiles":
+                                return pak.has_device_profiles;
+                              case "windows_engine":
+                                return pak.has_windows_engine;
+                              case "engine":
+                                return pak.has_engine_ini;
+                              case "base_engine":
+                                return pak.has_base_engine;
+                            }
+                          })
+                          .map((t) => (
+                            <Badge key={t} variant="outline" className="text-[10px] px-2 py-0.5">
+                              {TARGET_BADGE[t]}
+                            </Badge>
+                          ))}
                       </div>
                     </button>
                     <Tip content="Remove from list">
@@ -993,10 +1044,10 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
             )}
           </div>
 
-          {/* Toolbar: edit target (when both INIs exist) + presets */}
+          {/* Toolbar: edit target (when 2+ INIs exist) + presets */}
           {selectedPak && tweakStates.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card/40 px-3 py-2">
-              {selectedPak.has_device_profiles && selectedPak.has_engine_ini && (
+              {presentTargetCount(selectedPak) >= 2 && (
                 <div className="flex items-center gap-2">
                   <Label className="shrink-0 text-[12px] font-medium text-muted-foreground">
                     Edit target
@@ -1006,19 +1057,37 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                     onValueChange={(v) => changeTarget(v as PakIniTarget)}
                     disabled={loading || applying}
                   >
-                    <SelectTrigger size="sm" className="w-56 text-[12px]">
+                    <SelectTrigger
+                      size="sm"
+                      className="w-56 text-left text-[12px] [&>span]:text-left"
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="device_profiles">DefaultDeviceProfiles.ini</SelectItem>
-                      <SelectItem value="engine">DefaultEngine.ini</SelectItem>
+                      {selectedPak.has_device_profiles && (
+                        <SelectItem value="device_profiles">
+                          {TARGET_LABEL.device_profiles}
+                        </SelectItem>
+                      )}
+                      {selectedPak.has_windows_engine && (
+                        <SelectItem value="windows_engine">
+                          {TARGET_LABEL.windows_engine}
+                        </SelectItem>
+                      )}
+                      {selectedPak.has_engine_ini && (
+                        <SelectItem value="engine">{TARGET_LABEL.engine}</SelectItem>
+                      )}
+                      {selectedPak.has_base_engine && (
+                        <SelectItem value="base_engine">{TARGET_LABEL.base_engine}</SelectItem>
+                      )}
                     </SelectContent>
                   </Select>
                   <Tip
                     content={
                       <span className="block break-normal">
-                        Toggles write to this file. DeviceProfiles overrides Engine at runtime; an
-                        edited key already present in the other file is kept in sync.
+                        Toggles write to this file. Runtime priority: DeviceProfiles over
+                        WindowsEngine over DefaultEngine over BaseEngine. An edited key already
+                        present in any other file is kept in sync.
                       </span>
                     }
                   >
@@ -1203,12 +1272,13 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                           const isSavedEnabled =
                             savedTweakStates.find((s) => s.id === tweak.id)?.active ?? false;
                           if (removeOnly && isSavedEnabled) return null;
-                          const needsEngine = engineOnly && !selectedPak.has_engine_ini;
-                          // Engine-section settings can't live in DefaultDeviceProfiles.ini.
+                          const needsEngine = engineOnly && !hasAnyEngine(selectedPak);
+                          // Engine-section settings can't live in DefaultDeviceProfiles.ini;
+                          // they need an engine file as the write target.
                           const blockedByTarget =
                             engineOnly &&
                             iniTarget === "device_profiles" &&
-                            selectedPak.has_engine_ini;
+                            hasAnyEngine(selectedPak);
                           const disabled = needsEngine || blockedByTarget;
                           const conflict = hasScalabilityConflict(tweak);
                           return (
@@ -1218,9 +1288,9 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                               isEnabled={isEnabled}
                               disabledReason={
                                 needsEngine
-                                  ? "Requires DefaultEngine.ini in this pak mod"
+                                  ? "Requires an Engine.ini in this pak mod"
                                   : blockedByTarget
-                                    ? "Needs an Engine.ini section — switch Edit target to DefaultEngine.ini"
+                                    ? "Needs an Engine.ini section — switch Edit target to an Engine file"
                                     : undefined
                               }
                               scalabilityConflict={conflict}

@@ -414,76 +414,292 @@ mod roundtrip_tests {
         }
     }
 
-    /// Apply edits to engine+dp content mirroring `apply_pak_tweaks`: plain CVar edits
-    /// go to `target`, engine-section settings always go to Engine, and an existing copy
-    /// of an edited key in the sibling file is kept in sync (never injected).
+    /// Four-file equivalent: simulate the full `apply_pak_tweaks` pipeline against
+    /// BaseEngine / DefaultEngine / WindowsEngine / DeviceProfiles content. Absent
+    /// files are represented by empty strings; the layer is treated as missing when
+    /// `present_*` is false (mirroring how `inspect_pak_for_ini` populates entries).
+    #[allow(clippy::too_many_arguments)]
+    fn apply_to_quad(
+        base: &str,
+        default: &str,
+        windows: &str,
+        dp: &str,
+        present_base: bool,
+        present_default: bool,
+        present_windows: bool,
+        present_dp: bool,
+        edits: &[PakTweakEdit],
+        target: PakIniTarget,
+    ) -> (String, String, String, String) {
+        let (engine_section_edits, plain_edits): (Vec<_>, Vec<_>) = edits
+            .iter()
+            .cloned()
+            .partition(|e| e.engine_section.is_some());
+
+        let mut base_after = base.to_string();
+        let mut default_after = default.to_string();
+        let mut windows_after = windows.to_string();
+        let mut dp_after = dp.to_string();
+
+        let resolved = if matches!(target, PakIniTarget::BaseEngine) && present_base
+            || matches!(target, PakIniTarget::Engine) && present_default
+            || matches!(target, PakIniTarget::WindowsEngine) && present_windows
+            || matches!(target, PakIniTarget::DeviceProfiles) && present_dp
+        {
+            target
+        } else {
+            // Mirror real resolve_target fallback order.
+            if present_dp {
+                PakIniTarget::DeviceProfiles
+            } else if present_windows {
+                PakIniTarget::WindowsEngine
+            } else if present_default {
+                PakIniTarget::Engine
+            } else if present_base {
+                PakIniTarget::BaseEngine
+            } else {
+                panic!("no files present");
+            }
+        };
+
+        let engine_section_target = match resolved {
+            PakIniTarget::DeviceProfiles => {
+                if present_windows {
+                    Some(PakIniTarget::WindowsEngine)
+                } else if present_default {
+                    Some(PakIniTarget::Engine)
+                } else if present_base {
+                    Some(PakIniTarget::BaseEngine)
+                } else {
+                    None
+                }
+            }
+            t => Some(t),
+        };
+
+        let write_to = |slot: PakIniTarget,
+                        content: &mut String,
+                        edits: &[PakTweakEdit],
+                        ini_type: IniType| {
+            *content = apply_edits_to_ini(content, edits, ini_type);
+            let _ = slot;
+        };
+
+        // Plain edits -> resolved target.
+        match resolved {
+            PakIniTarget::BaseEngine => write_to(
+                PakIniTarget::BaseEngine,
+                &mut base_after,
+                &plain_edits,
+                IniType::Engine,
+            ),
+            PakIniTarget::Engine => write_to(
+                PakIniTarget::Engine,
+                &mut default_after,
+                &plain_edits,
+                IniType::Engine,
+            ),
+            PakIniTarget::WindowsEngine => write_to(
+                PakIniTarget::WindowsEngine,
+                &mut windows_after,
+                &plain_edits,
+                IniType::Engine,
+            ),
+            PakIniTarget::DeviceProfiles => write_to(
+                PakIniTarget::DeviceProfiles,
+                &mut dp_after,
+                &plain_edits,
+                IniType::DeviceProfiles,
+            ),
+        }
+
+        // Engine-section edits -> engine_section_target.
+        if !engine_section_edits.is_empty()
+            && let Some(eng_target) = engine_section_target
+        {
+            match eng_target {
+                PakIniTarget::BaseEngine => write_to(
+                    eng_target,
+                    &mut base_after,
+                    &engine_section_edits,
+                    IniType::Engine,
+                ),
+                PakIniTarget::Engine => write_to(
+                    eng_target,
+                    &mut default_after,
+                    &engine_section_edits,
+                    IniType::Engine,
+                ),
+                PakIniTarget::WindowsEngine => write_to(
+                    eng_target,
+                    &mut windows_after,
+                    &engine_section_edits,
+                    IniType::Engine,
+                ),
+                PakIniTarget::DeviceProfiles => unreachable!(),
+            }
+        }
+
+        // Plain-edit sibling sync across the other present files.
+        let layers: [(PakIniTarget, bool, &str, IniType); 4] = [
+            (
+                PakIniTarget::BaseEngine,
+                present_base,
+                "BaseEngine.ini",
+                IniType::Engine,
+            ),
+            (
+                PakIniTarget::Engine,
+                present_default,
+                "DefaultEngine.ini",
+                IniType::Engine,
+            ),
+            (
+                PakIniTarget::WindowsEngine,
+                present_windows,
+                "WindowsEngine.ini",
+                IniType::Engine,
+            ),
+            (
+                PakIniTarget::DeviceProfiles,
+                present_dp,
+                "DefaultDeviceProfiles.ini",
+                IniType::DeviceProfiles,
+            ),
+        ];
+
+        for (slot, present, label, ini_type) in layers {
+            if !present || slot == resolved {
+                continue;
+            }
+            let content_ref = match slot {
+                PakIniTarget::BaseEngine => &base_after,
+                PakIniTarget::Engine => &default_after,
+                PakIniTarget::WindowsEngine => &windows_after,
+                PakIniTarget::DeviceProfiles => &dp_after,
+            };
+            let present_keys: HashSet<String> = parse_console_vars(content_ref, label)
+                .into_iter()
+                .map(|s| s.key.to_ascii_lowercase())
+                .collect();
+            let filtered: Vec<PakTweakEdit> = plain_edits
+                .iter()
+                .filter(|e| present_keys.contains(&e.key.to_ascii_lowercase()))
+                .cloned()
+                .collect();
+            match slot {
+                PakIniTarget::BaseEngine => {
+                    base_after = apply_edits_to_ini(&base_after, &filtered, ini_type)
+                }
+                PakIniTarget::Engine => {
+                    default_after = apply_edits_to_ini(&default_after, &filtered, ini_type)
+                }
+                PakIniTarget::WindowsEngine => {
+                    windows_after = apply_edits_to_ini(&windows_after, &filtered, ini_type)
+                }
+                PakIniTarget::DeviceProfiles => {
+                    dp_after = apply_edits_to_ini(&dp_after, &filtered, ini_type)
+                }
+            }
+        }
+
+        // Engine-section sibling sync across the other engine files.
+        if !engine_section_edits.is_empty()
+            && let Some(eng_target) = engine_section_target
+        {
+            for (slot, present, label) in [
+                (PakIniTarget::BaseEngine, present_base, "BaseEngine.ini"),
+                (PakIniTarget::Engine, present_default, "DefaultEngine.ini"),
+                (
+                    PakIniTarget::WindowsEngine,
+                    present_windows,
+                    "WindowsEngine.ini",
+                ),
+            ] {
+                if !present || slot == eng_target {
+                    continue;
+                }
+                let content_ref = match slot {
+                    PakIniTarget::BaseEngine => &base_after,
+                    PakIniTarget::Engine => &default_after,
+                    PakIniTarget::WindowsEngine => &windows_after,
+                    _ => unreachable!(),
+                };
+                let present_keys: HashSet<String> = parse_console_vars(content_ref, label)
+                    .into_iter()
+                    .map(|s| s.key.to_ascii_lowercase())
+                    .collect();
+                let filtered: Vec<PakTweakEdit> = engine_section_edits
+                    .iter()
+                    .filter(|e| present_keys.contains(&e.key.to_ascii_lowercase()))
+                    .cloned()
+                    .collect();
+                match slot {
+                    PakIniTarget::BaseEngine => {
+                        base_after = apply_edits_to_ini(&base_after, &filtered, IniType::Engine)
+                    }
+                    PakIniTarget::Engine => {
+                        default_after =
+                            apply_edits_to_ini(&default_after, &filtered, IniType::Engine)
+                    }
+                    PakIniTarget::WindowsEngine => {
+                        windows_after =
+                            apply_edits_to_ini(&windows_after, &filtered, IniType::Engine)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        (base_after, default_after, windows_after, dp_after)
+    }
+
+    /// Legacy 2-file wrapper used by existing tests: delegates to the 4-file helper
+    /// with empty/absent BaseEngine and WindowsEngine layers.
     fn apply_to_pair(
         engine: &str,
         dp: &str,
         edits: &[PakTweakEdit],
         target: PakIniTarget,
     ) -> (String, String) {
-        let (engine_section_edits, plain_edits): (Vec<_>, Vec<_>) = edits
-            .iter()
-            .cloned()
-            .partition(|e| e.engine_section.is_some());
-
-        let mut engine_after = engine.to_string();
-        let mut dp_after = dp.to_string();
-
-        // Plain CVar edits -> the chosen target file.
-        match target {
-            PakIniTarget::Engine => {
-                engine_after = apply_edits_to_ini(&engine_after, &plain_edits, IniType::Engine);
-            }
-            PakIniTarget::DeviceProfiles => {
-                dp_after = apply_edits_to_ini(&dp_after, &plain_edits, IniType::DeviceProfiles);
-            }
-        }
-
-        // Engine-section settings are not console variables; they only live in Engine.ini.
-        if !engine_section_edits.is_empty() {
-            engine_after =
-                apply_edits_to_ini(&engine_after, &engine_section_edits, IniType::Engine);
-        }
-
-        // Keep an existing copy of each edited CVar consistent in the sibling file.
-        let sibling_is_engine = matches!(target, PakIniTarget::DeviceProfiles);
-        let (sibling_content, sibling_label, sibling_type) = if sibling_is_engine {
-            (&engine_after, "DefaultEngine.ini", IniType::Engine)
-        } else {
-            (
-                &dp_after,
-                "DefaultDeviceProfiles.ini",
-                IniType::DeviceProfiles,
-            )
-        };
-        let present: HashSet<String> = parse_console_vars(sibling_content, sibling_label)
-            .into_iter()
-            .map(|s| s.key.to_ascii_lowercase())
-            .collect();
-        let filtered: Vec<PakTweakEdit> = plain_edits
-            .iter()
-            .filter(|e| present.contains(&e.key.to_ascii_lowercase()))
-            .cloned()
-            .collect();
-        if sibling_is_engine {
-            engine_after = apply_edits_to_ini(&engine_after, &filtered, sibling_type);
-        } else {
-            dp_after = apply_edits_to_ini(&dp_after, &filtered, sibling_type);
-        }
-
-        (engine_after, dp_after)
+        let (_, default_after, _, dp_after) =
+            apply_to_quad("", engine, "", dp, false, true, false, true, edits, target);
+        (default_after, dp_after)
     }
 
     /// Build the synthetic key=value content `detect_pak_tweaks` feeds to the detector.
     fn merge_to_synthetic(engine: &str, dp: &str) -> String {
-        let mut merged = parse_console_vars(engine, "DefaultEngine.ini");
-        let dp_vars = parse_console_vars(dp, "DefaultDeviceProfiles.ini");
-        for dp_var in dp_vars {
-            let key_lower = dp_var.key.to_ascii_lowercase();
-            merged.retain(|v| v.key.to_ascii_lowercase() != key_lower);
-            merged.push(dp_var);
+        merge_to_synthetic_quad("", engine, "", dp, false, true, false, true)
+    }
+
+    /// Four-file variant of merge_to_synthetic; matches `read_pak_tweaks` priority chain.
+    #[allow(clippy::too_many_arguments)]
+    fn merge_to_synthetic_quad(
+        base: &str,
+        default: &str,
+        windows: &str,
+        dp: &str,
+        present_base: bool,
+        present_default: bool,
+        present_windows: bool,
+        present_dp: bool,
+    ) -> String {
+        let layers: [(&str, bool, &str); 4] = [
+            (base, present_base, "BaseEngine.ini"),
+            (default, present_default, "DefaultEngine.ini"),
+            (windows, present_windows, "WindowsEngine.ini"),
+            (dp, present_dp, "DefaultDeviceProfiles.ini"),
+        ];
+        let mut merged: Vec<PakTweakState> = Vec::new();
+        for (content, present, label) in layers {
+            if !present {
+                continue;
+            }
+            for var in parse_console_vars(content, label) {
+                let key_lower = var.key.to_ascii_lowercase();
+                merged.retain(|v| v.key.to_ascii_lowercase() != key_lower);
+                merged.push(var);
+            }
         }
         merged
             .iter()
@@ -726,6 +942,189 @@ mod roundtrip_tests {
         assert!(
             out.contains("+CVars=r.Foo=1"),
             "cvar should be inserted:\n{out}"
+        );
+    }
+
+    #[test]
+    fn detection_picks_up_key_set_only_in_base_engine() {
+        let base = "[ConsoleVariables]\nr.OnlyInBase=7\n";
+        let synthetic = merge_to_synthetic_quad(base, "", "", "", true, false, false, false);
+        assert!(
+            synthetic.contains("r.OnlyInBase=7"),
+            "synthetic merge should surface BaseEngine value:\n{synthetic}"
+        );
+    }
+
+    #[test]
+    fn windows_engine_overrides_base_engine() {
+        let base = "[ConsoleVariables]\nr.Shared=1\n";
+        let windows = "[ConsoleVariables]\nr.Shared=9\n";
+        let synthetic = merge_to_synthetic_quad(base, "", windows, "", true, false, true, false);
+        assert!(
+            synthetic.contains("r.Shared=9"),
+            "WindowsEngine value should win over BaseEngine:\n{synthetic}"
+        );
+        assert!(
+            !synthetic.contains("r.Shared=1"),
+            "BaseEngine value should not appear:\n{synthetic}"
+        );
+    }
+
+    #[test]
+    fn default_engine_overrides_base_engine() {
+        let base = "[ConsoleVariables]\nr.Shared=1\n";
+        let default = "[ConsoleVariables]\nr.Shared=5\n";
+        let synthetic = merge_to_synthetic_quad(base, default, "", "", true, true, false, false);
+        assert!(
+            synthetic.contains("r.Shared=5"),
+            "DefaultEngine value should win over BaseEngine:\n{synthetic}"
+        );
+        assert!(
+            !synthetic.contains("r.Shared=1"),
+            "BaseEngine value should not appear:\n{synthetic}"
+        );
+    }
+
+    #[test]
+    fn device_profiles_wins_over_windows_engine() {
+        let windows = "[ConsoleVariables]\nr.Shared=9\n";
+        let dp = "[Windows DeviceProfile]\n+CVars=r.Shared=42\n";
+        let synthetic = merge_to_synthetic_quad("", "", windows, dp, false, false, true, true);
+        assert!(
+            synthetic.contains("r.Shared=42"),
+            "DeviceProfiles value should still win at runtime:\n{synthetic}"
+        );
+    }
+
+    #[test]
+    fn apply_to_windows_target_syncs_existing_key_in_default_and_base() {
+        let base = "[ConsoleVariables]\nr.Foo=0\n";
+        let default = "[ConsoleVariables]\nr.Foo=0\n";
+        let windows = "[ConsoleVariables]\nr.Foo=0\n";
+        let (base_after, default_after, windows_after, _) = apply_to_quad(
+            base,
+            default,
+            windows,
+            "",
+            true,
+            true,
+            true,
+            false,
+            &[cvar_edit("r.Foo", Some("1"))],
+            PakIniTarget::WindowsEngine,
+        );
+        assert!(
+            windows_after.contains("r.Foo=1"),
+            "WindowsEngine target gets the new value:\n{windows_after}"
+        );
+        assert!(
+            default_after.contains("r.Foo=1"),
+            "DefaultEngine sibling updated to avoid shadow:\n{default_after}"
+        );
+        assert!(
+            base_after.contains("r.Foo=1"),
+            "BaseEngine sibling updated to avoid shadow:\n{base_after}"
+        );
+    }
+
+    #[test]
+    fn apply_to_base_target_does_not_inject_into_higher_priority_siblings() {
+        let base = "[ConsoleVariables]\n";
+        let default = "[ConsoleVariables]\n";
+        let windows = "[ConsoleVariables]\n";
+        let (base_after, default_after, windows_after, _) = apply_to_quad(
+            base,
+            default,
+            windows,
+            "",
+            true,
+            true,
+            true,
+            false,
+            &[cvar_edit("r.Foo", Some("1"))],
+            PakIniTarget::BaseEngine,
+        );
+        assert!(
+            base_after.contains("r.Foo=1"),
+            "BaseEngine target gets the new value:\n{base_after}"
+        );
+        assert!(
+            !default_after.to_ascii_lowercase().contains("r.foo"),
+            "DefaultEngine should not be injected:\n{default_after}"
+        );
+        assert!(
+            !windows_after.to_ascii_lowercase().contains("r.foo"),
+            "WindowsEngine should not be injected:\n{windows_after}"
+        );
+    }
+
+    #[test]
+    fn removal_clears_key_from_all_four_files() {
+        let base = "[ConsoleVariables]\nr.Foo=0\n";
+        let default = "[ConsoleVariables]\nr.Foo=0\n";
+        let windows = "[ConsoleVariables]\nr.Foo=0\n";
+        let dp = "[Windows DeviceProfile]\n+CVars=r.Foo=0\n";
+        let (base_after, default_after, windows_after, dp_after) = apply_to_quad(
+            base,
+            default,
+            windows,
+            dp,
+            true,
+            true,
+            true,
+            true,
+            &[cvar_edit("r.Foo", None)],
+            PakIniTarget::DeviceProfiles,
+        );
+        for (name, content) in [
+            ("base", &base_after),
+            ("default", &default_after),
+            ("windows", &windows_after),
+            ("dp", &dp_after),
+        ] {
+            assert!(
+                !content.to_ascii_lowercase().contains("r.foo"),
+                "{name} should be cleared:\n{content}"
+            );
+        }
+    }
+
+    #[test]
+    fn engine_section_edit_routes_to_highest_engine_when_target_is_device_profiles() {
+        // ApplicationScale lives in [/Script/Engine.UserInterfaceSettings], not [ConsoleVariables].
+        // When user targets DeviceProfiles, engine-section edits must still land in an
+        // engine file -- the highest-priority one present.
+        let default = "[/Script/Engine.UserInterfaceSettings]\n";
+        let windows = "[/Script/Engine.UserInterfaceSettings]\n";
+        let dp = "[Windows DeviceProfile]\n";
+        let edit = PakTweakEdit {
+            key: "ApplicationScale".into(),
+            value: Some("1.5".into()),
+            engine_section: Some("/Script/Engine.UserInterfaceSettings".into()),
+        };
+        let (_, default_after, windows_after, dp_after) = apply_to_quad(
+            "",
+            default,
+            windows,
+            dp,
+            false,
+            true,
+            true,
+            true,
+            &[edit],
+            PakIniTarget::DeviceProfiles,
+        );
+        assert!(
+            windows_after.contains("ApplicationScale=1.5"),
+            "engine-section edit should land in WindowsEngine (highest engine present):\n{windows_after}"
+        );
+        assert!(
+            !default_after.contains("ApplicationScale="),
+            "DefaultEngine should not be injected:\n{default_after}"
+        );
+        assert!(
+            !dp_after.to_ascii_lowercase().contains("applicationscale"),
+            "DeviceProfiles should never receive engine-section keys:\n{dp_after}"
         );
     }
 }
