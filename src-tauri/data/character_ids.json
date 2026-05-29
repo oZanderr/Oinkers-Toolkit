@@ -1,6 +1,6 @@
 {
   "source": "https://raw.githubusercontent.com/donutman07/MarvelRivalsCharacterIDs/main/MarvelRivalsCharacterIDs.md",
-  "generated_at": "2026-05-22T09:39:30.117Z",
+  "generated_at": "2026-05-29T10:04:50.624Z",
   "characters": {
     "1011": {
       "name": "Hulk",
@@ -617,6 +617,7 @@
         "1049100": "Lone Wolf",
         "1049300": "Blood Berserker",
         "1049301": "DOG BROTHER X",
+        "1049302": "X-2099",
         "1049500": "Patch",
         "1049501": "Weapon X",
         "1049502": "Weapon PhoeniX",
@@ -800,7 +801,7 @@
         "1060001": "Default",
         "1060100": "ROSY RECON",
         "1060101": "SECRET AGENT",
-        "1060500": "YOON JI-WOO: THE LEADER:"
+        "1060500": "YOON JI-WOO: THE LEADER"
       }
     },
     "1061": {
@@ -809,7 +810,10 @@
         "1061001": "Default",
         "1061100": "GILDED SHADOW",
         "1061101": "BEGUILING BLUE",
-        "1061300": "URBAN PREDATOR"
+        "1061300": "URBAN PREDATOR",
+        "1061301": "PURPLE PROWL",
+        "1061302": "PINK PURR",
+        "1061500": "WILD CARD"
       }
     },
     "1062": {
@@ -819,6 +823,13 @@
         "1062100": "TROPICAL BEAST",
         "1062101": "CORPORATE CRUNCHER",
         "1062500": "CHRONO-ARMOR"
+      }
+    },
+    "1063": {
+      "name": "Cyclops",
+      "skins": {
+        "1063001": "Default",
+        "1063500": "ALCHEMAX"
       }
     },
     "1065": {
