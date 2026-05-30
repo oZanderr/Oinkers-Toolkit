@@ -466,6 +466,9 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
       const info = infoOverride ?? pakList.find((p) => p.path === pak);
       const optionalSuffix = info?.optional_pak ? " (incl. optional)" : "";
       showNotice(`${cached.entries.length} file(s) inside ${displayName}${optionalSuffix}`, "ok");
+      // A still in-flight load from the previous selection will skip setBusy(false) via
+      // its gen guard, so clear it here for the latest gen.
+      setBusy(false);
       return;
     }
     setPakContents([]);
@@ -1141,12 +1144,19 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
 
   async function extractVanilla() {
     if (!selectedPak || !gamePath || !selectedIsVanilla || !selectedIsIoStore) return;
-    const outputDir = await open({
+    const dir = await open({
       directory: true,
       multiple: false,
       title: "Choose extract output folder",
     });
-    if (typeof outputDir !== "string") return;
+    if (typeof dir !== "string") return;
+    const pakBaseName =
+      selectedPak
+        .replace(/\\/g, "/")
+        .split("/")
+        .pop()
+        ?.replace(/\.pak$/i, "") ?? "output";
+    const outputDir = `${dir}\\${pakBaseName}`;
     const sourceUtoc = selectedPak.replace(/\.pak$/i, ".utoc");
     setBusy(true);
     setVanillaProgress({ op: "extract", phase: "starting", current: 0, total: 0 });
@@ -1172,11 +1182,9 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         outputDir,
       });
       const optTag = report.optional_container_name ? "+opt" : "";
-      showNotice(
-        `Extracted ${report.container_name}${optTag} → ${report.total_files} files`,
-        "ok",
-        { revealPath: outputDir }
-      );
+      showNotice(`Extracted ${report.container_name}${optTag} to ${outputDir}`, "ok", {
+        revealPath: outputDir,
+      });
     } catch (e: unknown) {
       showNotice(String(e), "err");
     } finally {
@@ -1229,11 +1237,9 @@ export function AssetManager({ gamePath, pendingPak, onPendingPakConsumed }: Pro
         outputDir,
       });
       const optTag = report.optional_container_name ? "+opt" : "";
-      showNotice(
-        `Rebuilt ${report.container_name}${optTag} → ${report.package_count} zen, ${report.pak_entry_count} pak`,
-        "ok",
-        { revealPath: outputDir }
-      );
+      showNotice(`Rebuilt ${report.container_name}${optTag} to ${outputDir}`, "ok", {
+        revealPath: outputDir,
+      });
     } catch (e: unknown) {
       showNotice(String(e), "err");
     } finally {

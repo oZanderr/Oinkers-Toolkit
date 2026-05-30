@@ -75,14 +75,42 @@ pub(crate) async fn extract_pak_ini(pak_path: String, entry: String) -> Result<S
 }
 
 #[tauri::command]
+pub(crate) async fn extract_game_default_ini(
+    game_root: String,
+    in_pak_path: String,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        pak_tweaks::extract_game_default_ini(&game_root, &in_pak_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn create_new_mod_pak(
+    game_root: String,
+    name: String,
+) -> Result<PakIniListing, String> {
+    if crate::game_status::should_block_for_game() {
+        return Err(crate::game_status::game_running_error());
+    }
+    tauri::async_runtime::spawn_blocking(move || pak_tweaks::create_new_mod_pak(&game_root, &name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub(crate) async fn save_pak_ini(
     pak_path: String,
     files: Vec<PakIniFileContent>,
+    deletes: Vec<String>,
 ) -> Result<String, String> {
     if crate::game_status::should_block_for_game() {
         return Err(crate::game_status::game_running_error());
     }
-    tauri::async_runtime::spawn_blocking(move || pak_tweaks::save_pak_ini(&pak_path, files))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        pak_tweaks::save_pak_ini(&pak_path, files, deletes)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

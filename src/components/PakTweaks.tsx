@@ -48,9 +48,17 @@ interface PakIniInfo {
   pak_path: string;
   has_device_profiles: boolean;
   has_engine_ini: boolean;
+  has_base_engine: boolean;
+  has_windows_engine: boolean;
   device_profiles_entry: string | null;
   engine_ini_entry: string | null;
+  base_engine_entry: string | null;
+  windows_engine_entry: string | null;
 }
+
+// One of the four tweakable INI files, used to render presence badges on each pak.
+// Runtime priority for shared keys: device_profiles > windows_engine > engine > base_engine.
+type PakIniTarget = "base_engine" | "engine" | "windows_engine" | "device_profiles";
 
 interface PakTweakEdit {
   key: string;
@@ -149,6 +157,17 @@ interface Props {
 }
 
 const ADVANCED_CATEGORIES = new Set(["Latency"]);
+
+function hasAnyEngine(pak: PakIniInfo): boolean {
+  return pak.has_engine_ini || pak.has_base_engine || pak.has_windows_engine;
+}
+
+const TARGET_BADGE: Record<PakIniTarget, string> = {
+  base_engine: "BaseEngine",
+  engine: "Engine",
+  windows_engine: "WindowsEngine",
+  device_profiles: "DeviceProfiles",
+};
 
 export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
   const [paks, setPaks] = useState<PakIniInfo[]>([]);
@@ -265,6 +284,8 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
     return onPakChanged((e) => {
       if (e.source === "PakTweaks") return;
       pakCache.current.delete(e.pakPath);
+      // An added/removed INI can change which paks qualify, so refresh the list.
+      scanRef.current(true);
       if (selectedPak?.pak_path !== e.pakPath) return;
       if (edits.length > 0) {
         showNotice("Pak changed elsewhere; reload manually to discard changes", "info", 6000);
@@ -661,7 +682,11 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
   async function selectPak(pak: PakIniInfo) {
     // Save current state before switching so we can restore it if user comes back
     if (selectedPak && selectedPak.pak_path !== pak.pak_path) {
-      pakCache.current.set(selectedPak.pak_path, { tweakStates, savedTweakStates, edits });
+      pakCache.current.set(selectedPak.pak_path, {
+        tweakStates,
+        savedTweakStates,
+        edits,
+      });
     }
 
     const cached = pakCache.current.get(pak.pak_path);
@@ -932,16 +957,31 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                         {pak.pak_name}
                       </span>
                       <div className="flex shrink-0 gap-1">
-                        {pak.has_device_profiles && (
-                          <Badge variant="outline" className="text-[10px] px-2 py-0.5">
-                            DeviceProfiles
-                          </Badge>
-                        )}
-                        {pak.has_engine_ini && (
-                          <Badge variant="outline" className="text-[10px] px-2 py-0.5">
-                            Engine
-                          </Badge>
-                        )}
+                        {(
+                          [
+                            "device_profiles",
+                            "windows_engine",
+                            "engine",
+                            "base_engine",
+                          ] as PakIniTarget[]
+                        )
+                          .filter((t) => {
+                            switch (t) {
+                              case "device_profiles":
+                                return pak.has_device_profiles;
+                              case "windows_engine":
+                                return pak.has_windows_engine;
+                              case "engine":
+                                return pak.has_engine_ini;
+                              case "base_engine":
+                                return pak.has_base_engine;
+                            }
+                          })
+                          .map((t) => (
+                            <Badge key={t} variant="outline" className="text-[10px] px-2 py-0.5">
+                              {TARGET_BADGE[t]}
+                            </Badge>
+                          ))}
                       </div>
                     </button>
                     <Tip content="Remove from list">
@@ -958,127 +998,132 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
             )}
           </div>
 
-          {/* Preset bar */}
+          {/* Toolbar: presets */}
           {selectedPak && tweakStates.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card/40 px-3 py-2">
-              <div className="w-56 shrink-0">
-                {savingAs || renamingAs ? (
-                  <input
-                    autoFocus
-                    value={newPresetName}
-                    onChange={(e) => setNewPresetName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        if (renamingAs) renameSelectedPreset();
-                        else saveCurrentAsPreset();
-                      }
-                      if (e.key === "Escape") {
-                        setSavingAs(false);
-                        setRenamingAs(false);
-                        setNewPresetName("");
-                      }
-                    }}
-                    placeholder={renamingAs ? "New preset name…" : "Preset name…"}
-                    className="h-7 w-full rounded-md border border-border bg-background px-3 text-[12px] outline-none placeholder:text-muted-foreground/50 focus:border-primary"
-                  />
-                ) : (
-                  <Select
-                    value={selectedPreset}
-                    onValueChange={(name) => {
-                      setSelectedPreset(name);
-                      const p = presets.find((x) => x.name === name);
-                      if (p) applyPresetToCurrentPak(p);
-                    }}
-                    disabled={presets.length === 0}
-                  >
-                    <SelectTrigger
-                      size="sm"
-                      className="w-full text-left text-[12px] [&>span]:text-left"
+              <div className="flex flex-wrap items-center gap-2">
+                <Label className="shrink-0 text-[12px] font-medium text-muted-foreground">
+                  Preset
+                </Label>
+                <div className="w-56 shrink-0">
+                  {savingAs || renamingAs ? (
+                    <input
+                      autoFocus
+                      value={newPresetName}
+                      onChange={(e) => setNewPresetName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          if (renamingAs) renameSelectedPreset();
+                          else saveCurrentAsPreset();
+                        }
+                        if (e.key === "Escape") {
+                          setSavingAs(false);
+                          setRenamingAs(false);
+                          setNewPresetName("");
+                        }
+                      }}
+                      placeholder={renamingAs ? "New preset name…" : "Preset name…"}
+                      className="h-7 w-full rounded-md border border-border bg-background px-3 text-[12px] outline-none placeholder:text-muted-foreground/50 focus:border-primary"
+                    />
+                  ) : (
+                    <Select
+                      value={selectedPreset}
+                      onValueChange={(name) => {
+                        setSelectedPreset(name);
+                        const p = presets.find((x) => x.name === name);
+                        if (p) applyPresetToCurrentPak(p);
+                      }}
+                      disabled={presets.length === 0}
                     >
-                      <SelectValue
-                        placeholder={presets.length === 0 ? "No saved presets" : "Choose preset…"}
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {presets.map((p) => (
-                        <SelectItem key={p.name} value={p.name}>
-                          {p.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                      <SelectTrigger
+                        size="sm"
+                        className="w-full text-left text-[12px] [&>span]:text-left"
+                      >
+                        <SelectValue
+                          placeholder={presets.length === 0 ? "No saved presets" : "Choose preset…"}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {presets.map((p) => (
+                          <SelectItem key={p.name} value={p.name}>
+                            {p.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+                {savingAs || renamingAs ? (
+                  <>
+                    <Tip content="Save (Enter)">
+                      <Button
+                        variant="blue"
+                        size="icon-sm"
+                        onClick={renamingAs ? renameSelectedPreset : saveCurrentAsPreset}
+                        disabled={
+                          !newPresetName.trim() ||
+                          (renamingAs && newPresetName.trim() === selectedPreset)
+                        }
+                      >
+                        <Save size={13} />
+                      </Button>
+                    </Tip>
+                    <Tip content="Cancel (Esc)">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => {
+                          setSavingAs(false);
+                          setRenamingAs(false);
+                          setNewPresetName("");
+                        }}
+                      >
+                        <X size={13} />
+                      </Button>
+                    </Tip>
+                  </>
+                ) : (
+                  <>
+                    {selectedPreset && (
+                      <>
+                        <Tip content="Save current tweaks into this preset">
+                          <Button variant="ghost" size="icon-sm" onClick={overwriteSelectedPreset}>
+                            <Save size={13} />
+                          </Button>
+                        </Tip>
+                        <Tip content="Rename this preset">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => {
+                              setNewPresetName(selectedPreset);
+                              setRenamingAs(true);
+                            }}
+                          >
+                            <Pencil size={13} />
+                          </Button>
+                        </Tip>
+                        <Tip content="Delete this preset">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="text-destructive hover:bg-destructive/15 hover:text-destructive"
+                            onClick={deleteSelectedPreset}
+                          >
+                            <Trash2 size={13} />
+                          </Button>
+                        </Tip>
+                        <span className="mx-1 h-4 w-px bg-border/60" />
+                      </>
+                    )}
+                    <Tip content="Save current tweaks as new preset">
+                      <Button variant="ghost" size="icon-sm" onClick={() => setSavingAs(true)}>
+                        <Plus size={13} />
+                      </Button>
+                    </Tip>
+                  </>
                 )}
               </div>
-              {savingAs || renamingAs ? (
-                <>
-                  <Tip content="Save (Enter)">
-                    <Button
-                      variant="blue"
-                      size="icon-sm"
-                      onClick={renamingAs ? renameSelectedPreset : saveCurrentAsPreset}
-                      disabled={
-                        !newPresetName.trim() ||
-                        (renamingAs && newPresetName.trim() === selectedPreset)
-                      }
-                    >
-                      <Save size={13} />
-                    </Button>
-                  </Tip>
-                  <Tip content="Cancel (Esc)">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => {
-                        setSavingAs(false);
-                        setRenamingAs(false);
-                        setNewPresetName("");
-                      }}
-                    >
-                      <X size={13} />
-                    </Button>
-                  </Tip>
-                </>
-              ) : (
-                <>
-                  {selectedPreset && (
-                    <>
-                      <Tip content="Save current tweaks into this preset">
-                        <Button variant="ghost" size="icon-sm" onClick={overwriteSelectedPreset}>
-                          <Save size={13} />
-                        </Button>
-                      </Tip>
-                      <Tip content="Rename this preset">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => {
-                            setNewPresetName(selectedPreset);
-                            setRenamingAs(true);
-                          }}
-                        >
-                          <Pencil size={13} />
-                        </Button>
-                      </Tip>
-                      <Tip content="Delete this preset">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          className="text-destructive hover:bg-destructive/15 hover:text-destructive"
-                          onClick={deleteSelectedPreset}
-                        >
-                          <Trash2 size={13} />
-                        </Button>
-                      </Tip>
-                      <span className="mx-1 h-4 w-px bg-border/60" />
-                    </>
-                  )}
-                  <Tip content="Save current tweaks as new preset">
-                    <Button variant="ghost" size="icon-sm" onClick={() => setSavingAs(true)}>
-                      <Plus size={13} />
-                    </Button>
-                  </Tip>
-                </>
-              )}
             </div>
           )}
 
@@ -1131,7 +1176,9 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                           const isSavedEnabled =
                             savedTweakStates.find((s) => s.id === tweak.id)?.active ?? false;
                           if (removeOnly && isSavedEnabled) return null;
-                          const needsEngine = engineOnly && !selectedPak.has_engine_ini;
+                          // Engine-section settings can't live in DefaultDeviceProfiles.ini;
+                          // they need an engine file present in the pak.
+                          const needsEngine = engineOnly && !hasAnyEngine(selectedPak);
                           const disabled = needsEngine;
                           const conflict = hasScalabilityConflict(tweak);
                           return (
@@ -1140,9 +1187,7 @@ export function PakTweaks({ gamePath, scalabilityContent, isActive }: Props) {
                               tweak={tweak}
                               isEnabled={isEnabled}
                               disabledReason={
-                                needsEngine
-                                  ? "Requires DefaultEngine.ini in this pak mod"
-                                  : undefined
+                                needsEngine ? "Requires an Engine.ini in this pak mod" : undefined
                               }
                               scalabilityConflict={conflict}
                               currentValue={
