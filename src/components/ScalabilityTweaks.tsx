@@ -16,6 +16,16 @@ import {
   X,
 } from "lucide-react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -106,6 +116,7 @@ interface Props {
   onBrowse: () => void;
   onSaved: (content: string) => void;
   onReload: () => void;
+  onDeleted: () => void;
 }
 
 export function ScalabilityTweaks({
@@ -119,6 +130,7 @@ export function ScalabilityTweaks({
   onBrowse,
   onSaved,
   onReload,
+  onDeleted,
 }: Props) {
   const [definitions, setDefinitions] = useState<TweakDefinition[]>([]);
   const [defsLoaded, setDefsLoaded] = useState(false);
@@ -134,6 +146,7 @@ export function ScalabilityTweaks({
   const [savingAs, setSavingAs] = useState(false);
   const [renamingAs, setRenamingAs] = useState(false);
   const [newPresetName, setNewPresetName] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const showStatus = (msg: string, type: StatusType = "info") => {
     if (statusTimer.current) clearTimeout(statusTimer.current);
@@ -355,6 +368,17 @@ export function ScalabilityTweaks({
     }
   }
 
+  async function deleteFile() {
+    if (!filePath) return;
+    try {
+      await invoke("delete_scalability", { path: filePath });
+      showStatus("Deleted Scalability.ini", "ok");
+      onDeleted();
+    } catch (e: unknown) {
+      showStatus(String(e), "err");
+    }
+  }
+
   // Group definitions by category (exclude pak-only tweaks)
   const scalabilityDefs = definitions.filter((d) => !d.pak_only);
 
@@ -479,6 +503,17 @@ export function ScalabilityTweaks({
                     <RefreshCw size={14} className={cn(detecting && "animate-spin")} />
                   </Button>
                 </Tip>
+                <Tip content="Delete Scalability.ini">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="text-muted-foreground hover:bg-destructive/15 hover:text-destructive"
+                    onClick={() => setConfirmDelete(true)}
+                    disabled={fileExists !== true}
+                  >
+                    <Trash2 size={14} />
+                  </Button>
+                </Tip>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -489,25 +524,23 @@ export function ScalabilityTweaks({
                 </Button>
               </div>
             </div>
-            <div className="px-3 py-2">
+            <div className="flex flex-col gap-1.5 px-3 py-2">
               <Tip content={filePath} disabled={!filePath}>
                 <span className="block truncate font-mono text-[12px] text-muted-foreground">
                   {filePath || "Path to Scalability.ini\u2026"}
                 </span>
               </Tip>
+              {fileExists === false && (
+                <span className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+                  <Info size={13} className="mt-px shrink-0" />
+                  <span>
+                    <strong className="font-medium text-foreground">Not found.</strong> Tweaks you
+                    save will create the file automatically.
+                  </span>
+                </span>
+              )}
             </div>
           </div>
-
-          {fileExists === false && (
-            <div className="flex items-start gap-2.5 rounded-md border border-border bg-muted/40 px-4 py-3 text-[12px] text-muted-foreground">
-              <Info size={14} className="mt-0.5 shrink-0" />
-              <span>
-                <strong className="font-semibold text-foreground">No Scalability.ini found.</strong>{" "}
-                You can still configure tweaks here, the file will be created automatically when you
-                save.
-              </span>
-            </div>
-          )}
 
           {/* Preset bar */}
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card/40 px-3 py-2">
@@ -702,6 +735,29 @@ export function ScalabilityTweaks({
           </Button>
         </div>
       )}
+
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Scalability.ini?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes the file at{" "}
+              <span className="font-mono text-foreground">{filePath}</span>. The tweaks here reset
+              to off; saving again recreates the file.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={deleteFile}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              <Trash2 size={13} />
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

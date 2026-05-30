@@ -268,6 +268,12 @@ export function ConfigTweaks({ gamePath, isActive }: Props) {
             setScalabilityContent(newContent);
           }}
           onReload={reloadContent}
+          onDeleted={() => {
+            setContent("");
+            setScalabilityContent("");
+            setFileExists(false);
+            setReloadSignal((s) => s + 1);
+          }}
         />
       </div>
 

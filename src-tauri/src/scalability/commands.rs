@@ -19,6 +19,11 @@ pub(crate) fn write_scalability(path: String, content: String) -> Result<(), Str
 }
 
 #[tauri::command]
+pub(crate) fn delete_scalability(path: String) -> Result<(), String> {
+    scalability::delete_scalability(&path)
+}
+
+#[tauri::command]
 pub(crate) fn get_tweak_definitions() -> Vec<TweakDefinition> {
     scalability::get_tweak_definitions()
 }

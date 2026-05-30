@@ -36,6 +36,20 @@ pub(crate) fn write_scalability(path: &str, content: &str) -> Result<(), String>
     fs::write(p, content).map_err(|e| e.to_string())
 }
 
+/// Delete Scalability.ini. A missing file is treated as success so the UI lands
+/// in the same "no file" state either way.
+pub(crate) fn delete_scalability(path: &str) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Err(
+            "Scalability.ini is read-only or in use. Clear the read-only attribute and try again."
+                .to_string(),
+        ),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Return the full tweak catalogue.
 pub(crate) fn get_tweak_definitions() -> Vec<TweakDefinition> {
     tweaks::catalogue::tweak_catalogue()

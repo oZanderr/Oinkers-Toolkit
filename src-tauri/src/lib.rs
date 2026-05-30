@@ -105,6 +105,7 @@ pub fn run() {
             scalability::commands::get_scalability_path,
             scalability::commands::read_scalability,
             scalability::commands::write_scalability,
+            scalability::commands::delete_scalability,
             scalability::commands::get_tweak_definitions,
             scalability::commands::detect_tweaks,
             scalability::commands::apply_tweaks,
