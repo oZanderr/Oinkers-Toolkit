@@ -173,23 +173,25 @@ pub(crate) fn extract_vanilla_container(
         return Err("Extraction cancelled".into());
     }
 
+    // Enumerate by physically-present ExportBundleData chunks, not header package_ids:
+    // a Patch_ container's header declares a store entry for the whole cumulative game,
+    // so iterating store.packages() would pull in every base-game package it merely references.
     let mut packages_to_extract: Vec<(FPackageId, String)> = Vec::new();
-    for pkg in store.packages() {
-        if pkg.container().container_name() != base_name {
+    for chunk in store.chunks() {
+        if chunk.container().container_name() != base_name {
             continue;
         }
-        let Some(full_path) = store.chunk_path(FIoChunkId::from_package_id(
-            pkg.id(),
-            0,
-            EIoChunkType::ExportBundleData,
-        )) else {
+        if chunk.id().get_chunk_type() != EIoChunkType::ExportBundleData {
+            continue;
+        }
+        let Some(full_path) = chunk.path() else {
             continue;
         };
         let asset_path = full_path
             .strip_prefix(MOUNT_POINT)
             .unwrap_or(&full_path)
             .to_string();
-        packages_to_extract.push((pkg.id(), asset_path));
+        packages_to_extract.push((chunk.id().get_package_id(), asset_path));
     }
 
     let total_packages = packages_to_extract.len();
